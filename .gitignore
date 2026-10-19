@@ -1,0 +1,21 @@
+# Build artifacts
+*.o
+*.elf
+nexus.iso
+iso_root/
+
+# QEMU state
+disk.img
+disk.img.*
+
+# Debug logs
+*.log
+qemu-trace.log
+
+# Session backups
+backups/
+
+# Vendor (eigene .git-Repos)
+limine/
+limine-src/
+limine-tool/
