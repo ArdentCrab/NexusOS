@@ -979,6 +979,9 @@ extern "C" void kernel_main(){
     hal::pf("[FS  ] bitmap rebuilt (%u data sectors in use)\n",
             (u32)fs::used_data_sectors());
 
+    // A7b-3c: Migration — alte FILE/NAME ohne PATH bekommen parent_hash=hash("/")
+    fs::migrate_files_v2();
+
     // Test-ELFs ins FS seeden (idempotent: nur wenn nicht vorhanden).
     // Damit sind alle ELF-Kommandos uniform ueber fs::cat_file erreichbar.
     {
