@@ -62,6 +62,12 @@ i64  fs_resolve(const char* rel, const char* cwd, char* out, u32 out_max);
 bool dir_is_empty(const char* path);
 void fs_lsdirs();
 
+
+// A7b-3a: absolute Pfad-API
+i64  fs_write_abs(const char* abs, const char* content, usize len);
+i64  fs_cat_abs(const char* abs, char* out, usize out_max);
+void migrate_files_v2();
+
 } // namespace fs
 
 #endif

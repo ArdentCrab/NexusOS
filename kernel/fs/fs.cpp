@@ -1,5 +1,6 @@
 // kernel/fs/fs.cpp — Refactor Session 5
 #include "kernel/fs/fs.h"
+#include "kernel/task/task.h"
 #include "kernel/idx/idx.h"
 
 // Forward-Decls: dev/ (S7) noch nicht extrahiert.
@@ -224,163 +225,164 @@ void rebuild_bitmap_from_index() {
 
 // ---- File-Write mit Extent-Chaining ----
 int write_file(const char* name, const char* content, usize len) {
-    if (!name || !*name) return -1;
-    usize nlen = 0; while (name[nlen] && nlen < 16) nlen++;
+  char abs[256];
+  const char* cwd = task::current ? task::current->cwd : "/";
+  if (fs_resolve(name, cwd, abs, sizeof(abs)) < 0) return -22;
+  return (int)fs_write_abs(abs, content, len);
+}
 
-    u64 h = hash_name(name);
-    u64 fkey = idx::NS_FILE | h;
-    u64 nkey = idx::NS_NAME | h;
+// A7b-3a: absolute write. 3-Record-Update (FILE + NAME + PATH).
+i64 fs_write_abs(const char* abs, const char* content, usize len) {
+  u64 h = hash_name(abs[0] == '/' ? abs + 1 : abs);
+  u64 fkey = idx::NS_FILE | h;
+  u64 nkey = idx::NS_NAME | h;
+  u64 pkey = idx::NS_PATH | h;
 
-    u64 na = 0, nb = 0;
-    for (usize i = 0; i < 8 && i < nlen; i++) na |= ((u64)(u8)name[i]) << (i * 8);
-    for (usize i = 8; i < 16 && i < nlen; i++) nb |= ((u64)(u8)name[i]) << ((i - 8) * 8);
-    idx::put(nkey, idx::Type::NAME, na, nb);
+  // basename + parent
+  char bn[32]; char par[256];
+  if (basename_of(abs, bn, sizeof(bn)) < 0) return -22;
+  u64 parent_hash = 0;
+  if (dirname_of(abs, par, sizeof(par)) > 0) parent_hash = hash_name(par);
 
-    // 1) Alte Werte merken, NICHT freigeben
-    u64 old_size = 0, old_ref = 0;
-    bool has_old = false;
-    idx::Rec* old = idx::find(fkey);
-    if (old && old->type == (u32)idx::Type::FILE) {
-        old_size = old->a;
-        old_ref  = old->b;
-        has_old  = true;
-    }
+  // NAME: a=basename[0..8], b=parent_hash
+  u64 na = 0;
+  for (int i = 0; i < 8 && bn[i]; i++) na |= ((u64)(u8)bn[i]) << (i*8);
+  idx::put(nkey, idx::Type::NAME, na, parent_hash);
 
-    // 2) Neue Daten schreiben
-    u64 a_val = (u64)len;
-    u64 b_val = 0;
+  // PATH: a=parent_hash, b=0
+  idx::put(pkey, idx::Type::PATH, parent_hash, 0);
 
-    if (len <= 8) {
-        for (usize i = 0; i < len; i++)
-            b_val |= ((u64)(u8)content[i]) << (i * 8);
-    } else if (len <= 512) {
-        if (!virtio_blk::is_ready()) return -2;
-        u64 sec = blk_alloc_nosave();
-        if (!sec) { bitmap_save(); return -3; }
-        u8 buf[512];
-        for (int i = 0; i < 512; i++) buf[i] = 0;
-        for (usize i = 0; i < len; i++) buf[i] = (u8)content[i];
-        virtio_blk::write_sector(sec, buf);
-        b_val = sec;
-    } else {
-        if (!virtio_blk::is_ready()) return -2;
-        u64 total_sectors = (len + 511) / 512;
+  // alter FILE-Record
+  u64 old_size = 0, old_ref = 0; bool has_old = false;
+  idx::Rec* old = idx::find(fkey);
+  if (old && old->type == (u32)idx::Type::FILE) {
+    old_size = old->a; old_ref = old->b; has_old = true;
+  }
 
-        // Ersten Index-Sektor allokieren
-        u64 first_idx_sec = blk_alloc_nosave();
-        if (!first_idx_sec) { bitmap_save(); return -3; }
-
-        u64 cur_idx_sec = first_idx_sec;
-        FsIndex cur_idx;
-        for (u32 i = 0; i < sizeof(FsIndex); i++) ((u8*)&cur_idx)[i] = 0;
-        u32 chain = 1;
-        u64 written = 0;
-
-        auto flush_idx = [](u64 sec, FsIndex* ix) {
-            u8 ibuf[512];
-            for (int i = 0; i < 512; i++) ibuf[i] = 0;
-            for (u32 k = 0; k < sizeof(FsIndex); k++) ibuf[k] = ((u8*)ix)[k];
-            virtio_blk::write_sector(sec, ibuf);
-        };
-
-        while (written < total_sectors) {
-            if (cur_idx.n_extents >= EXTENTS_PER_INDEX) {
-                flush_idx(cur_idx_sec, &cur_idx);
-                u64 next_sec = blk_alloc_nosave();
-                if (!next_sec) { bitmap_save(); return -3; }
-                cur_idx_sec = next_sec;
-                for (u32 i = 0; i < sizeof(FsIndex); i++) ((u8*)&cur_idx)[i] = 0;
-                if (++chain > INDEX_CHAIN_MAX) { bitmap_save(); return -5; }
-            }
-
-            u64 remain = total_sectors - written;
-            u32 want = (remain > EXTENT_MAX_SECTORS) ? EXTENT_MAX_SECTORS : (u32)remain;
-            u64 data_lba = blk_alloc_run(want);
-            if (!data_lba) {
-                // fragmentiert: Stueck fuer Stueck
-                data_lba = blk_alloc_nosave();
-                if (!data_lba) { bitmap_save(); return -3; }
-                want = 1;
-            }
-            FsExtent& ex = cur_idx.extents[cur_idx.n_extents++];
-            ex.start = (u32)data_lba;
-            ex.count = want;
-
-            for (u32 s = 0; s < want; s++) {
-                u8 dbuf[512];
-                for (int j = 0; j < 512; j++) dbuf[j] = 0;
-                u64 off = (written + s) * 512;
-                usize chunk = (len - off > 512) ? 512 : (len - off);
-                for (usize j = 0; j < chunk; j++) dbuf[j] = (u8)content[off + j];
-                virtio_blk::write_sector(data_lba + s, dbuf);
-            }
-            written += want;
-        }
+  u64 a_val = (u64)len, b_val = 0;
+  if (len <= 8) {
+    for (usize i = 0; i < len; i++) b_val |= ((u64)(u8)content[i]) << (i*8);
+  } else if (len <= 512) {
+    if (!virtio_blk::is_ready()) return -2;
+    u64 sec = blk_alloc_nosave();
+    if (!sec) { bitmap_save(); return -3; }
+    u8 buf[512]; for (int i = 0; i < 512; i++) buf[i] = 0;
+    for (usize i = 0; i < len; i++) buf[i] = (u8)content[i];
+    virtio_blk::write_sector(sec, buf); b_val = sec;
+  } else {
+    if (!virtio_blk::is_ready()) return -2;
+    u64 total_sectors = (len + 511) / 512;
+    u64 first_idx_sec = blk_alloc_nosave();
+    if (!first_idx_sec) { bitmap_save(); return -3; }
+    u64 cur_idx_sec = first_idx_sec;
+    FsIndex cur_idx; for (u32 i = 0; i < sizeof(FsIndex); i++) ((u8*)&cur_idx)[i] = 0;
+    u32 chain = 1; u64 written = 0;
+    auto flush_idx = [](u64 sec, FsIndex* ix) {
+      u8 ibuf[512]; for (int i = 0; i < 512; i++) ibuf[i] = 0;
+      for (u32 k = 0; k < sizeof(FsIndex); k++) ibuf[k] = ((u8*)ix)[k];
+      virtio_blk::write_sector(sec, ibuf);
+    };
+    while (written < total_sectors) {
+      if (cur_idx.n_extents >= EXTENTS_PER_INDEX) {
         flush_idx(cur_idx_sec, &cur_idx);
-        b_val = first_idx_sec;
+        u64 next_sec = blk_alloc_nosave();
+        if (!next_sec) { bitmap_save(); return -3; }
+        cur_idx_sec = next_sec;
+        for (u32 i = 0; i < sizeof(FsIndex); i++) ((u8*)&cur_idx)[i] = 0;
+        if (++chain > INDEX_CHAIN_MAX) { bitmap_save(); return -5; }
+      }
+      u64 remain = total_sectors - written;
+      u32 want = (remain > EXTENT_MAX_SECTORS) ? EXTENT_MAX_SECTORS : (u32)remain;
+      u64 data_lba = blk_alloc_run(want);
+      if (!data_lba) {
+        data_lba = blk_alloc_nosave();
+        if (!data_lba) { bitmap_save(); return -3; }
+        want = 1;
+      }
+      FsExtent& ex = cur_idx.extents[cur_idx.n_extents++];
+      ex.start = (u32)data_lba; ex.count = want;
+      for (u32 si = 0; si < want; si++) {
+        u8 dbuf[512]; for (int j = 0; j < 512; j++) dbuf[j] = 0;
+        u64 off = (written + si) * 512;
+        usize chunk = (len - off > 512) ? 512 : (len - off);
+        for (usize j = 0; j < chunk; j++) dbuf[j] = (u8)content[off + j];
+        virtio_blk::write_sector(data_lba + si, dbuf);
+      }
+      written += want;
     }
-
-    // 3) Bitmap VOR idx::put speichern
-    bitmap_save();
-
-    // 4) File-Record umhaengen
-    idx::put(fkey, idx::Type::FILE, a_val, b_val);
-
-    // 5) Erst jetzt alte Bloecke freigeben
-    if (has_old && old_size > 8) {
-        fs_release_file(old_size, old_ref);
-        bitmap_save();
-    }
-
-    return (int)len;
+    flush_idx(cur_idx_sec, &cur_idx);
+    b_val = first_idx_sec;
+  }
+  bitmap_save();
+  idx::put(fkey, idx::Type::FILE, a_val, b_val);
+  if (has_old && old_size > 8) { fs_release_file(old_size, old_ref); bitmap_save(); }
+  return (i64)len;
 }
 
 // KNOWN LIMITATION (P2): laedt immer die komplette Datei in den Puffer.
 // Bei Dateien >1 MiB oder vielen gleichzeitig offenen fds wird der 8 MiB
 // Heap knapp. Spaeter: extent-aware read_at(offset, len).
 int cat_file(const char* name, char* out, usize out_max) {
-    u64 h = hash_name(name);
-    u64 fkey = idx::NS_FILE | h;
-    idx::Rec* r = idx::find(fkey);
-    if (!r || r->type != (u32)idx::Type::FILE) return -1;
+  char abs[256];
+  const char* cwd = task::current ? task::current->cwd : "/";
+  if (fs_resolve(name, cwd, abs, sizeof(abs)) < 0) return -1;
+  i64 r = fs_cat_abs(abs, out, out_max);
+  return (int)r;
+}
 
-    u64 len = r->a;
-    u64 b_val = r->b;
-    usize n = (usize)len;
-    if (n > out_max - 1) n = out_max - 1;
-
-    if (len <= 8) {
-        for (usize i = 0; i < n; i++) out[i] = (char)((b_val >> (i * 8)) & 0xFF);
-    } else if (len <= 512) {
-        u8 buf[512];
-        virtio_blk::read_sector(b_val, buf);
-        for (usize i = 0; i < n; i++) out[i] = (char)buf[i];
-    } else {
-        u64 idx_sec = b_val;
-        usize copied = 0;
-        u32 chain = 0;
-        while (idx_sec && copied < n && chain++ < INDEX_CHAIN_MAX) {
-            u8 ibuf[512];
-            virtio_blk::read_sector(idx_sec, ibuf);
-            FsIndex* ix = (FsIndex*)ibuf;
-            if (ix->n_extents > EXTENTS_PER_INDEX) break;
-            for (u32 e = 0; e < ix->n_extents && copied < n; e++) {
-                u32 st = ix->extents[e].start;
-                u32 cn = ix->extents[e].count;
-                for (u32 s = 0; s < cn && copied < n; s++) {
-                    u8 dbuf[512];
-                    virtio_blk::read_sector(st + s, dbuf);
-                    usize chunk = n - copied;
-                    if (chunk > 512) chunk = 512;
-                    for (usize j = 0; j < chunk; j++) out[copied + j] = (char)dbuf[j];
-                    copied += chunk;
-                }
-            }
-            idx_sec = ix->next;
+// A7b-3a: absolute cat.
+i64 fs_cat_abs(const char* abs, char* out, usize out_max) {
+  u64 h = hash_name(abs[0] == '/' ? abs + 1 : abs);
+  u64 fkey = idx::NS_FILE | h;
+  idx::Rec* r = idx::find(fkey);
+  if (!r || r->type != (u32)idx::Type::FILE) return -1;
+  u64 len = r->a; u64 b_val = r->b;
+  usize n = (usize)len;
+  if (n > out_max - 1) n = out_max - 1;
+  if (len <= 8) {
+    for (usize i = 0; i < n; i++) out[i] = (char)((b_val >> (i*8)) & 0xFF);
+  } else if (len <= 512) {
+    u8 buf[512]; virtio_blk::read_sector(b_val, buf);
+    for (usize i = 0; i < n; i++) out[i] = (char)buf[i];
+  } else {
+    u64 idx_sec = b_val; usize copied = 0; u32 chain = 0;
+    while (idx_sec && copied < n && chain++ < INDEX_CHAIN_MAX) {
+      u8 ibuf[512]; virtio_blk::read_sector(idx_sec, ibuf);
+      FsIndex* ix = (FsIndex*)ibuf;
+      if (ix->n_extents > EXTENTS_PER_INDEX) break;
+      for (u32 e = 0; e < ix->n_extents && copied < n; e++) {
+        u32 st = ix->extents[e].start; u32 cn = ix->extents[e].count;
+        for (u32 si = 0; si < cn && copied < n; si++) {
+          u8 dbuf[512]; virtio_blk::read_sector(st + si, dbuf);
+          usize chunk = n - copied; if (chunk > 512) chunk = 512;
+          for (usize j = 0; j < chunk; j++) out[copied + j] = (char)dbuf[j];
+          copied += chunk;
         }
+      }
+      idx_sec = ix->next;
     }
-    out[n] = 0;
-    return (int)len;
+  }
+  out[n] = 0;
+  return (i64)len;
+}
+
+// A7b-3a: Migration. Fuer alle NS_NAME-Records, die noch alt-Format haben
+// (b = basename[8..16] statt parent_hash), setze b = hash("/") = 177620.
+// Da alle Alt-Files in Root lagen, ist Parent = "/".
+static void _migrate_name_visit(idx::Rec* r, void*) {
+  u64 root_hash = hash_name("/");
+  if (r->b != root_hash) idx::put(r->key, idx::Type::NAME, r->a, root_hash);
+}
+static void _migrate_file_visit(idx::Rec* r, void*) {
+  u64 h = r->key & 0x00FFFFFFFFFFFFFFULL;
+  if (!idx::find(idx::NS_PATH | h)) {
+    u64 root_hash = hash_name("/");
+    idx::put(idx::NS_PATH | h, idx::Type::PATH, root_hash, 0);
+  }
+}
+void migrate_files_v2() {
+  idx::scan(idx::Type::NAME, _migrate_name_visit, nullptr);
+  idx::scan(idx::Type::FILE, _migrate_file_visit, nullptr);
 }
 
 struct ListCtx { int count; };
@@ -415,10 +417,32 @@ static void file_visit(idx::Rec* r, void* ctx) {
 }
 
 void ls_files() {
-    hal::ps("files:\n");
-    ListCtx c{0};
-    idx::scan(idx::Type::FILE, file_visit, &c);
-    hal::pf("  total: %u\n", c.count);
+  struct Ctx { int count; } c{0};
+  auto visit = [](idx::Rec* r, void* v) {
+    Ctx* cc = (Ctx*)v; cc->count++;
+    u64 h = r->key & 0x00FFFFFFFFFFFFFFULL;
+    idx::Rec* nr = idx::find(idx::NS_NAME | h);
+    char nm[20]; int nn = 0;
+    if (nr) {
+      for (int i = 0; i < 8; i++) {
+        char ch = (char)((nr->a >> (i*8)) & 0xFF);
+        if (!ch) break;
+        nm[nn++] = ch;
+      }
+    }
+    nm[nn] = 0;
+    hal::ps("  ");
+    if (nn > 0) { hal::ps(nm); int pad = 16 - nn; while (pad-- > 0) hal::pc(' '); }
+    else        { hal::ps("?               "); }
+    hal::pf("size=%u  ref=", (u32)r->a);
+    if (r->a <= 8) hal::ps("(inline)");
+    else if (r->a <= 512) hal::pf("sect@%p", r->b);
+    else hal::pf("chain@%p", r->b);
+    hal::pc('\n');
+  };
+  hal::ps("files:\n");
+  idx::scan(idx::Type::FILE, visit, &c);
+  hal::pf("  total: %u\n", c.count);
 }
 
 int rm_file(const char* name) {

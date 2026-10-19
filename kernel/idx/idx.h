@@ -6,7 +6,7 @@
 
 namespace idx {
 
-enum class Type : u8 { TASK=0, CONFIG=1, EVENT=2, TRIGGER=3, SYS=4, FILE=5, NAME=6, DIR=7 };
+enum class Type : u8 { TASK=0, CONFIG=1, EVENT=2, TRIGGER=3, SYS=4, FILE=5, NAME=6, DIR=7, PATH=8 };
 
 static constexpr u64 NS_CONFIG  = 0x01ULL << 56;
 static constexpr u64 NS_TASK    = 0x02ULL << 56;
@@ -15,6 +15,7 @@ static constexpr u64 NS_TRIGGER = 0x04ULL << 56;
 static constexpr u64 NS_FILE    = 0x05ULL << 56;
 static constexpr u64 NS_NAME    = 0x06ULL << 56;
 static constexpr u64 NS_DIR     = 0x07ULL << 56;
+static constexpr u64 NS_PATH    = 0x08ULL << 56;
 
 struct Rec { u64 key; u32 type; u32 color; u64 a; u64 b; Rec* left; Rec* right; };
 

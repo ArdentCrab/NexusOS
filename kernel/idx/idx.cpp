@@ -185,7 +185,7 @@ static void hash_mix(HashCtx* c, u64 x) {
 }
 
 static bool type_is_persistent(u32 t) {
-    return t == 1 || t == 4 || t == 5 || t == 6 || t == 7;   // CONFIG, SYS, FILE, NAME
+    return t == 1 || t == 4 || t == 5 || t == 6 || t == 7 || t == 8;   // CONFIG, SYS, FILE, NAME
 }
 
 static bool hash_include(u32 t, const HashCtx* c) {
