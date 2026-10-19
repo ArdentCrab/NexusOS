@@ -30,6 +30,9 @@ static constexpr u32 PATH_MAX_NAME  = 32;
 enum : i64 {
     FS_E_INVAL       = -22,
     FS_E_NAMETOOLONG = -36,
+    FS_E_NOTEMPTY    = -39,
+    FS_E_NOENT       = -2,
+    FS_E_EXIST       = -17,
 };
 
 struct Path {
@@ -52,6 +55,12 @@ i64 basename_of(const char* path, char* out, u32 out_max);
 i64 fs_mkdir(const char* path);
 i64 fs_rmdir(const char* path);
 bool dir_exists(const char* path);
+
+
+// A7b-2: resolve rel gegen cwd. Rueckgabe Laenge oder -errno.
+i64  fs_resolve(const char* rel, const char* cwd, char* out, u32 out_max);
+bool dir_is_empty(const char* path);
+void fs_lsdirs();
 
 } // namespace fs
 

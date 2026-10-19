@@ -365,6 +365,8 @@ static void cmd_help() {
         "  mkdir <path>           create directory (A7b-1)\n"
         "  rmdir <path>           remove directory (A7b-1)\n"
         "  pwd-test <path>        check dir_exists (A7b-1)\n"
+        "  cd [<path>]            change cwd (A7b-2)\n"
+        "  pwd                    print cwd (A7b-2)\n"
         "  sleep <ms>             sleep N milliseconds (cap 30s)\n"
         "  ls                     list files\n"
         "  rm <name>              remove file\n"
@@ -438,6 +440,7 @@ static void cmd_get(int ac, char** av) {
         case idx::Type::SYS:     tname = "SYS";     break;
         case idx::Type::FILE:    tname = "FILE";    break;
         case idx::Type::NAME:    tname = "NAME";    break;
+        case idx::Type::DIR:     tname = "DIR";     break;
     }
     hal::pf("%p  type=%s  a=%p  b=%p\n", key, tname, r->a, r->b);
 }
@@ -757,23 +760,46 @@ static void cmd_pathtest(int ac, char** av) {
 
 static void cmd_mkdir(int ac, char** av) {
   if (ac < 2) { hal::ps("usage: mkdir <path>\n"); return; }
-  i64 r = fs::fs_mkdir(av[1]);
-  if (r < 0) hal::pf("mkdir %s -> %ld\n", av[1], r);
-  else       hal::pf("OK, mkdir %s\n", av[1]);
+  char abs[128];
+  i64 r = fs::fs_resolve(av[1], task::current->cwd, abs, sizeof(abs));
+  if (r < 0) { hal::pf("mkdir: resolve -> %ld\n", r); return; }
+  r = fs::fs_mkdir(abs);
+  if (r < 0) hal::pf("mkdir %s -> %ld\n", abs, r);
+  else       hal::pf("OK, mkdir %s\n", abs);
 }
 static void cmd_rmdir(int ac, char** av) {
   if (ac < 2) { hal::ps("usage: rmdir <path>\n"); return; }
-  i64 r = fs::fs_rmdir(av[1]);
-  if (r < 0) hal::pf("rmdir %s -> %ld\n", av[1], r);
-  else       hal::pf("OK, rmdir %s\n", av[1]);
+  char abs[128];
+  i64 r = fs::fs_resolve(av[1], task::current->cwd, abs, sizeof(abs));
+  if (r < 0) { hal::pf("rmdir: resolve -> %ld\n", r); return; }
+  r = fs::fs_rmdir(abs);
+  if (r < 0) hal::pf("rmdir %s -> %ld\n", abs, r);
+  else       hal::pf("OK, rmdir %s\n", abs);
 }
 static void cmd_pwdtest(int ac, char** av) {
   if (ac < 2) { hal::ps("usage: pwd-test <path>\n"); return; }
-  bool e = fs::dir_exists(av[1]);
-  hal::pf("%s: %s\n", av[1], e ? "EXISTS" : "NOT FOUND");
+  char abs[128];
+  i64 r = fs::fs_resolve(av[1], task::current->cwd, abs, sizeof(abs));
+  if (r < 0) { hal::pf("resolve -> %ld\n", r); return; }
+  bool e = fs::dir_exists(abs);
+  hal::pf("%s: %s\n", abs, e ? "EXISTS" : "NOT FOUND");
 }
 static void cmd_lsdirs() {
-  hal::ps("(lsdirs kommt in A7b-2)\n");
+  fs::fs_lsdirs();
+}
+static void cmd_cd(int ac, char** av) {
+  if (ac < 2) {
+    task::current->cwd[0] = '/'; task::current->cwd[1] = 0;
+    return;
+  }
+  char abs[128];
+  i64 r = fs::fs_resolve(av[1], task::current->cwd, abs, sizeof(abs));
+  if (r < 0) { hal::pf("cd: resolve -> %ld\n", r); return; }
+  if (!fs::dir_exists(abs)) { hal::pf("cd: %s: not found\n", abs); return; }
+  for (u32 i = 0; i <= (u32)r; i++) task::current->cwd[i] = abs[i];
+}
+static void cmd_pwd() {
+  hal::pf("%s\n", task::current->cwd);
 }
 
 static void cmd_lseek(int ac, char** av) {
@@ -1329,6 +1355,8 @@ static void dispatch() {
     if (streq(c, "rmdir"))                     { cmd_rmdir(argc, argv); return; }
     if (streq(c, "lsdirs"))                    { cmd_lsdirs(); return; }
     if (streq(c, "pwd-test"))                  { cmd_pwdtest(argc, argv); return; }
+    if (streq(c, "cd"))                       { cmd_cd(argc, argv); return; }
+    if (streq(c, "pwd"))                      { cmd_pwd(); return; }
     if (streq(c, "pathtest"))                 { cmd_pathtest(argc, argv); return; }
     if (streq(c, "sleep"))                     { cmd_sleep(argc, argv); return; }
     if (streq(c, "ls"))                        { cmd_ls(); return; }

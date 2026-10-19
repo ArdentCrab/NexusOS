@@ -450,19 +450,28 @@ namespace fs {
 i64 parse_path(const char* path, Path* out) {
   if (!path || !out) return FS_E_INVAL;
   if (*path != '/') return FS_E_INVAL;
-  u32 pl = 0; while (path[pl]) pl++;
-  if (pl > 1 && path[pl-1] == '/') return FS_E_INVAL;
-  out->n = 0; const char* p = path + 1;
+  out->n = 0;
+  const char* p = path + 1;
   if (!*p) return 0;
   while (*p) {
-    if (out->n >= PATH_MAX_DEPTH) return FS_E_NAMETOOLONG;
     u32 len = 0;
     while (*p && *p != '/') {
       if (len >= PATH_MAX_NAME - 1) return FS_E_NAMETOOLONG;
       out->parts[out->n][len++] = *p++;
     }
-    if (len == 0) return FS_E_INVAL;
-    out->parts[out->n][len] = 0; out->n++;
+    if (len == 0) {
+      if (*p == '/') { p++; continue; }
+      return FS_E_INVAL;
+    }
+    out->parts[out->n][len] = 0;
+    if (len == 1 && out->parts[out->n][0] == '.') {
+      // "." skip
+    } else if (len == 2 && out->parts[out->n][0] == '.' && out->parts[out->n][1] == '.') {
+      if (out->n > 0) out->n--;
+    } else {
+      if (out->n >= PATH_MAX_DEPTH) return FS_E_NAMETOOLONG;
+      out->n++;
+    }
     if (*p == '/') p++;
   }
   return 0;
@@ -500,13 +509,14 @@ i64 basename_of(const char* path, char* out, u32 out_max) {
 namespace fs {
 
 bool dir_exists(const char* path) {
-    Path p;
-    if (parse_path(path, &p) < 0) return false;
-    char norm[256];
-    if (build_path(&p, norm, sizeof(norm)) < 0) return false;
-    u64 h = hash_name(norm);
-    idx::Rec* r = idx::find(idx::NS_DIR | h);
-    return r && r->type == (u32)idx::Type::DIR;
+  Path p;
+  if (parse_path(path, &p) < 0) return false;
+  if (p.n == 0) return true;
+  char norm[256];
+  if (build_path(&p, norm, sizeof(norm)) < 0) return false;
+  u64 h = hash_name(norm);
+  idx::Rec* r = idx::find(idx::NS_DIR | h);
+  return r && r->type == (u32)idx::Type::DIR;
 }
 
 i64 fs_mkdir(const char* path) {
@@ -527,21 +537,90 @@ i64 fs_mkdir(const char* path) {
         if (!dir_exists(pbuf)) return -2;
     }
     u64 h = hash_name(norm);
-    idx::put(idx::NS_DIR | h, idx::Type::DIR, 0, 0);
+    char parent_norm[256];
+    u64 parent_hash = 0;
+    if (dirname_of(norm, parent_norm, sizeof(parent_norm)) > 0)
+        parent_hash = hash_name(parent_norm);
+    char bn[PATH_MAX_NAME];
+    u64 b_val = 0;
+    if (basename_of(norm, bn, sizeof(bn)) > 0) {
+        for (int i = 0; i < 7 && bn[i]; i++)
+            b_val |= ((u64)(u8)bn[i]) << (i*8);
+    }
+    idx::put(idx::NS_DIR | h, idx::Type::DIR, parent_hash, b_val);
     return 0;
 }
 
-// A7b-1: prüft noch NICHT ob Verzeichnis leer ist (kommt in A7b-2)
+struct _EmptyCtx { u64 ph; bool found; };
+static void _empty_visit(idx::Rec* r, void* v) {
+    _EmptyCtx* c = (_EmptyCtx*)v;
+    if (r->a == c->ph) c->found = true;
+}
+
+bool dir_is_empty(const char* path) {
+    Path p;
+    if (parse_path(path, &p) < 0) return false;
+    char norm[256];
+    if (build_path(&p, norm, sizeof(norm)) < 0) return false;
+    _EmptyCtx c = { hash_name(norm), false };
+    idx::scan(idx::Type::DIR, _empty_visit, &c);
+    return !c.found;
+}
+
 i64 fs_rmdir(const char* path) {
     Path p;
     if (parse_path(path, &p) < 0) return FS_E_INVAL;
     if (p.n == 0) return FS_E_INVAL;
     char norm[256];
     if (build_path(&p, norm, sizeof(norm)) < 0) return FS_E_NAMETOOLONG;
-    if (!dir_exists(norm)) return -2;
+    if (!dir_exists(norm)) return FS_E_NOENT;
+    if (!dir_is_empty(norm)) return FS_E_NOTEMPTY;
     u64 h = hash_name(norm);
     idx::remove(idx::NS_DIR | h);
     return 0;
+}
+
+i64 fs_resolve(const char* rel, const char* cwd, char* out, u32 out_max) {
+  if (!rel || !*rel) return FS_E_INVAL;
+  char merged[256];
+  if (rel[0] == '/') {
+    u32 n = 0; while (rel[n]) n++;
+    if (n + 1 > (u32)sizeof(merged)) return FS_E_NAMETOOLONG;
+    for (u32 i = 0; i <= n; i++) merged[i] = rel[i];
+  } else {
+    u32 cn = 0; while (cwd[cn]) cn++;
+    u32 rn = 0; while (rel[rn]) rn++;
+    if (cn + 1 + rn + 1 > (u32)sizeof(merged)) return FS_E_NAMETOOLONG;
+    u32 pos = 0;
+    for (u32 i = 0; i < cn; i++) merged[pos++] = cwd[i];
+    if (cn > 1) merged[pos++] = '/';
+    for (u32 i = 0; i < rn; i++) merged[pos + i] = rel[i];
+    merged[pos + rn] = 0;
+  }
+  Path p;
+  if (parse_path(merged, &p) < 0) return FS_E_INVAL;
+  return build_path(&p, out, out_max);
+}
+
+struct _LsCtx { u32 n; };
+static void _ls_visit(idx::Rec* r, void* v) {
+    _LsCtx* c = (_LsCtx*)v;
+    c->n++;
+    char nm[9];
+    for (int i = 0; i < 8; i++) {
+        char ch = (char)((r->b >> (i*8)) & 0xFF);
+        if (!ch) { nm[i] = 0; break; }
+        nm[i] = ch;
+        if (i == 7) nm[8] = 0;
+    }
+    hal::pf("  %-10s parent=0x%lx\n", nm, r->a);
+}
+
+void fs_lsdirs() {
+    _LsCtx c = { 0 };
+    hal::ps("dirs:\n");
+    idx::scan(idx::Type::DIR, _ls_visit, &c);
+    hal::pf("  total: %u\n", c.n);
 }
 
 } // namespace fs (A7b-1)

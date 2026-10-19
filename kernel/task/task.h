@@ -24,6 +24,9 @@ struct TCB {
     // Scheduling
     u32 priority;    // 0..10, default 5
     u64 wake_tick;   // 0 = not sleeping (fuer S14 sleep)
+
+    // A7b-2: current working directory
+    char cwd[128];
 };
 
 extern TCB* current;
