@@ -445,3 +445,54 @@ int rm_file(const char* name) {
 }
 
 }  // namespace fs
+
+namespace fs {
+i64 parse_path(const char* path, Path* out) {
+  if (!path || !out) return FS_E_INVAL;
+  if (*path != '/') return FS_E_INVAL;
+  u32 pl = 0; while (path[pl]) pl++;
+  if (pl > 1 && path[pl-1] == '/') return FS_E_INVAL;
+  out->n = 0; const char* p = path + 1;
+  if (!*p) return 0;
+  while (*p) {
+    if (out->n >= PATH_MAX_DEPTH) return FS_E_NAMETOOLONG;
+    u32 len = 0;
+    while (*p && *p != '/') {
+      if (len >= PATH_MAX_NAME - 1) return FS_E_NAMETOOLONG;
+      out->parts[out->n][len++] = *p++;
+    }
+    if (len == 0) return FS_E_INVAL;
+    out->parts[out->n][len] = 0; out->n++;
+    if (*p == '/') p++;
+  }
+  return 0;
+}
+i64 build_path(const Path* p, char* out, u32 out_max) {
+  if (!p || !out || out_max < 2) return FS_E_INVAL;
+  u32 pos = 0; out[pos++] = '/';
+  if (p->n == 0) { out[pos] = 0; return (i64)pos; }
+  for (u32 i = 0; i < p->n; i++) {
+    u32 len = 0; while (p->parts[i][len]) len++;
+    if (pos + len + 1 > out_max) return FS_E_NAMETOOLONG;
+    for (u32 k = 0; k < len; k++) out[pos++] = p->parts[i][k];
+    if (i + 1 < p->n) out[pos++] = '/';
+  }
+  out[pos] = 0; return (i64)pos;
+}
+i64 dirname_of(const char* path, char* out, u32 out_max) {
+  Path p; i64 r = parse_path(path, &p);
+  if (r < 0) return r;
+  if (p.n <= 1) { if (out_max < 2) return FS_E_NAMETOOLONG; out[0]='/'; out[1]=0; return 1; }
+  p.n--; return build_path(&p, out, out_max);
+}
+i64 basename_of(const char* path, char* out, u32 out_max) {
+  Path p; i64 r = parse_path(path, &p);
+  if (r < 0) return r;
+  if (p.n == 0) { if (out_max < 2) return FS_E_NAMETOOLONG; out[0]='/'; out[1]=0; return 1; }
+  const char* nm = p.parts[p.n-1];
+  u32 len = 0; while (nm[len]) len++;
+  if (len + 1 > out_max) return FS_E_NAMETOOLONG;
+  for (u32 i = 0; i < len; i++) out[i] = nm[i];
+  out[len] = 0; return (i64)len;
+}
+} // namespace fs (A7a)

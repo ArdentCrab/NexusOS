@@ -361,6 +361,7 @@ static void cmd_help() {
         "  writetrunc <name> <text>  sys_open(O_TRUNC) + write + close\n"
         "  cat <name>             read file\n"
         "  lseek <name> <o> <w>   set file offset (w: 0=SET 1=CUR 2=END)\n"
+        "  pathtest <path>        parse/dirname/basename (A7a)\n"
         "  sleep <ms>             sleep N milliseconds (cap 30s)\n"
         "  ls                     list files\n"
         "  rm <name>              remove file\n"
@@ -735,6 +736,21 @@ static void cmd_trunc(int ac, char** av) {
     else       hal::ps("OK\n");
 }
 
+
+static void cmd_pathtest(int ac, char** av) {
+  if (ac < 2) { hal::ps("usage: pathtest <path>\n"); return; }
+  fs::Path p; i64 r = fs::parse_path(av[1], &p);
+  if (r < 0) { hal::pf("parse -> %ld\n", r); return; }
+  hal::pf("parts=%u\n", (u32)p.n);
+  for (u32 i = 0; i < p.n; i++) hal::pf("  [%u] '%s'\n", i, p.parts[i]);
+  char b[256];
+  i64 n = fs::build_path(&p, b, sizeof(b));
+  if (n < 0) hal::pf("build -> %ld\n", n); else hal::pf("norm: %s (%ld)\n", b, n);
+  n = fs::dirname_of(av[1], b, sizeof(b));
+  if (n < 0) hal::pf("dirname -> %ld\n", n); else hal::pf("dirname: %s\n", b);
+  n = fs::basename_of(av[1], b, sizeof(b));
+  if (n < 0) hal::pf("basename -> %ld\n", n); else hal::pf("basename: %s\n", b);
+}
 
 static void cmd_lseek(int ac, char** av) {
     if (ac < 4) { hal::ps("usage: lseek <name> <offset> <whence 0=SET 1=CUR 2=END>\n"); return; }
@@ -1285,6 +1301,7 @@ static void dispatch() {
     if (streq(c, "writetrunc"))                 { cmd_writetrunc(argc, argv); return; }
     if (streq(c, "cat"))                       { cmd_cat(argc, argv); return; }
     if (streq(c, "lseek"))                     { cmd_lseek(argc, argv); return; }
+    if (streq(c, "pathtest"))                 { cmd_pathtest(argc, argv); return; }
     if (streq(c, "sleep"))                     { cmd_sleep(argc, argv); return; }
     if (streq(c, "ls"))                        { cmd_ls(); return; }
     if (streq(c, "rm"))                        { cmd_rm(argc, argv); return; }

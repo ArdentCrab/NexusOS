@@ -23,6 +23,32 @@ void rebuild_bitmap_from_index();
 int  bm_dirty_count();
 u64  bm_write_count();
 
+// --- Pfad-Handling (A7a) ---
+static constexpr u32 PATH_MAX_DEPTH = 8;
+static constexpr u32 PATH_MAX_NAME  = 32;
+
+enum : i64 {
+    FS_E_INVAL       = -22,
+    FS_E_NAMETOOLONG = -36,
+};
+
+struct Path {
+    char parts[PATH_MAX_DEPTH][PATH_MAX_NAME];
+    u32  n;
+};
+
+// Zerlegt "/a/b/c" in {a, b, c}. Rueckgabe 0 oder -errno.
+i64 parse_path(const char* path, Path* out);
+
+// Baut aus Path einen normalisierten Pfad "/a/b/c". Rueckgabe Laenge oder -errno.
+i64 build_path(const Path* p, char* out, u32 out_max);
+
+// Kuerzt "/a/b/c" auf "/a/b". Rueckgabe Laenge oder -errno.
+i64 dirname_of(const char* path, char* out, u32 out_max);
+
+// Liefert den letzten Komponenten "/a/b/c" -> "c". Rueckgabe Laenge oder -errno.
+i64 basename_of(const char* path, char* out, u32 out_max);
+
 } // namespace fs
 
 #endif
