@@ -349,7 +349,7 @@ static void cmd_help() {
         "  get <key>              read a record (hex or decimal key)\n"
         "  put <key> <a> <b>      write a CONFIG record\n"
         "  scan <type>            list: task config trigger event sys\n"
-        "  tasks                  list all tasks with state\n"
+        "  tasks                  list all tasks with state\n"        "  prio <pid> [<p>]       get/set task priority (0-10, default 5)\n"
         "  mem                    pmm / heap / slab stats\n"
         "  clear                  clear screen (ANSI)\n"
         "  pci                    list PCI devices\n"
@@ -471,7 +471,7 @@ static void print_task_visit(idx::Rec* r, void*) {
     print_padded(t->name, 10);
     hal::ps("  ");
     print_padded(st, 8);
-    hal::pf("  vrt=%u\n", (u32)t->vruntime);
+    hal::pf("  prio=%u  vrt=%u\n", (u32)t->priority, (u32)t->vruntime);
 }
 static void print_rec_visit(idx::Rec* r, void*) {
     hal::pf("  %p  type=%u  a=%p  b=%p\n", r->key, r->type, r->a, r->b);
@@ -768,6 +768,28 @@ static void cmd_lseek(int ac, char** av) {
         hal::pf("read -> %d\n", (i32)n);
     }
     sys_close((u64)fd);
+}
+
+
+static void cmd_prio(int ac, char** av) {
+    if (ac < 2) { hal::ps("usage: prio <pid> [<new_prio 0-10>] | prio list\n"); return; }
+    if (streq(av[1], "list")) { cmd_tasks(); return; }
+    u64 pid = 0;
+    if (!parse_num(av[1], &pid)) { hal::ps("bad pid\n"); return; }
+    if (ac < 3) {
+        i64 p = task::sys_getpriority(pid);
+        if (p < 0) { hal::pf("getpriority(%lu) -> %ld (no such task)\n", pid, p); return; }
+        hal::pf("pid=%lu priority=%ld\n", pid, p);
+        return;
+    }
+    u64 newp = 0;
+    if (!parse_num(av[2], &newp)) { hal::ps("bad prio\n"); return; }
+    if (newp > 10) { hal::ps("priority must be 0..10\n"); return; }
+    i64 r = task::sys_setpriority(pid, newp);
+    if (r < 0) { hal::pf("setpriority(%lu, %lu) -> %ld\n", pid, newp, r); return; }
+    hal::pf("OK, pid=%lu priority=%lu\n", pid, newp);
+    if (pid == task::current->pid && newp < 3)
+        hal::ps("WARN: current task demoted to <3; may starve\n");
 }
 
 static void cmd_cat(int ac, char** av) {
@@ -1236,6 +1258,7 @@ static void dispatch() {
     if (streq(c, "get")  || streq(c, "g"))     { cmd_get(argc, argv); return; }
     if (streq(c, "put")  || streq(c, "p"))     { cmd_put(argc, argv); return; }
     if (streq(c, "scan") || streq(c, "s"))     { cmd_scan(argc, argv); return; }
+    if (streq(c, "prio"))                      { cmd_prio(argc, argv); return; }
     if (streq(c, "tasks")|| streq(c, "t") || streq(c, "ps"))
                                                { cmd_tasks(); return; }
     if (streq(c, "mem")  || streq(c, "m"))     { cmd_mem(); return; }

@@ -20,6 +20,10 @@ struct TCB {
     u32 started;
     u32 dead;
     FileDesc fds[FD_MAX];
+
+    // Scheduling
+    u32 priority;    // 0..10, default 5
+    u64 wake_tick;   // 0 = not sleeping (fuer S14 sleep)
 };
 
 extern TCB* current;
@@ -34,6 +38,11 @@ void mark_ready(TCB* t);
 void mark_dead(TCB* t);
 u64  reap(TCB* skip);
 void dump_current();
+
+// Syscall-API (syscall.cpp ruft diese)
+i64 sys_setpriority(u64 pid, u64 prio);  // 0=OK, <0=-errno
+i64 sys_getpriority(u64 pid);            // 0..10, <0=-errno
+
 
 } // namespace task
 

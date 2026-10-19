@@ -422,7 +422,7 @@ extern "C" u64 irq_dispatch(Regs* r){
         if (prev->dead) {
             task::mark_dead(prev);
         } else {
-            prev->vruntime += 10;
+            prev->vruntime += (20 - prev->priority) * 3;
             task::mark_ready(prev);
         }
     }

@@ -30,6 +30,8 @@ TCB* spawn_full(const char* name, void(*fn)(void*), void* arg,
     *--sp = 0; *--sp = 0; *--sp = 0;
     t->rsp = (u64)sp;
     t->started = 0;
+    t->priority = 5;   // default
+    t->wake_tick = 0;
     t->pml4_phys         = pml4_phys;
     t->user_entry_va     = entry_va;
     t->user_stack_top_va = stack_top;
@@ -44,7 +46,11 @@ static void pick_visit(idx::Rec* r, void* v){
     PickCtx* c = (PickCtx*)v;
     if (r->b != ST_READY) return;
     TCB* t = (TCB*)r->a;
-    if (!c->best || t->vruntime < c->best->vruntime) c->best = t;
+    if (!c->best) { c->best = t; return; }
+    // vruntime asc (primaer), priority desc (tiebreaker)
+    if (t->vruntime < c->best->vruntime) { c->best = t; return; }
+    if (t->vruntime > c->best->vruntime) return;
+    if (t->priority > c->best->priority) c->best = t;
 }
 TCB* pick_next_ready(){
     PickCtx c{nullptr};
@@ -152,3 +158,26 @@ extern "C" void task_entry_inner(){
     for(;;) __asm__ volatile("sti; hlt");
 }
 
+
+// Syscall-API: Prioritaet setzen/lesen
+namespace task {
+
+i64 sys_setpriority(u64 pid, u64 prio) {
+    if (prio > 10) return (i64)-22;  // EINVAL
+    idx::Rec* r = idx::find(idx::NS_TASK | pid);
+    if (!r || r->type != (u32)idx::Type::TASK) return (i64)-3;  // ESRCH
+    TCB* t = (TCB*)r->a;
+    if (!t) return (i64)-3;
+    t->priority = (u32)prio;
+    return 0;
+}
+
+i64 sys_getpriority(u64 pid) {
+    idx::Rec* r = idx::find(idx::NS_TASK | pid);
+    if (!r || r->type != (u32)idx::Type::TASK) return (i64)-3;
+    TCB* t = (TCB*)r->a;
+    if (!t) return (i64)-3;
+    return (i64)t->priority;
+}
+
+} // namespace task (reopened)

@@ -96,6 +96,12 @@ extern "C" u64 syscall_dispatch(u64* regs) {
     if (nr == 8) {   // lseek(fd, offset, whence)
         return (u64)sys_lseek(a0, (i64)a1, (u32)a2);
     }
+    if (nr == 140) { // getpriority(pid)
+        return (u64)task::sys_getpriority(a0);
+    }
+    if (nr == 141) { // setpriority(pid, prio)
+        return (u64)task::sys_setpriority(a0, a1);
+    }
     if (nr == 39) {  // getpid()
         task::TCB* t = task::current;
         return t ? t->pid : 0;
