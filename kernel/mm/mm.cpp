@@ -79,6 +79,8 @@ static Class classes[] = {
     {256,  nullptr, 0, 0, {0}},
     {512,  nullptr, 0, 0, {0}},
     {1024, nullptr, 0, 0, {0}},
+    {2048, nullptr, 0, 0, {0}},
+    {4096, nullptr, 0, 0, {0}},
 };
 static_assert(sizeof(classes)/sizeof(classes[0]) == NCLASSES, "slab::NCLASSES inkonsistent mit classes[]");
 static constexpr usize HDR_SIZE = 16;
@@ -249,7 +251,7 @@ void  slab::heap_free(void* p){ heap::free(p); }
 
 // Global new/delete: Slab fuer kleine, Heap fuer grosse
 void* operator new  (usize n){
-    if (n <= 1024) { void* p = slab::alloc(n); if (p) return p; }
+    if (n <= 4096) { void* p = slab::alloc(n); if (p) return p; }
     return heap::alloc(n);
 }
 void* operator new[](usize n){ return ::operator new(n); }
@@ -262,8 +264,8 @@ void  operator delete  (void* p) noexcept {
     hal::panic("operator delete: unknown allocation");
 }
 void  operator delete[](void* p) noexcept { ::operator delete(p); }
-void  operator delete  (void*, usize) noexcept {}
-void  operator delete[](void*, usize) noexcept {}
+void  operator delete  (void* p, usize) noexcept { ::operator delete(p); }
+void  operator delete[](void* p, usize) noexcept { ::operator delete(p); }
 
 // ---------------------------------------------------------------------------
 // VMM

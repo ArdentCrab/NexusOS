@@ -47,3 +47,18 @@ Kernel-Half (PML4[256..511]) ist per Design in allen PML4s identisch
 wenn jemand versehentlich User-Mappings in PML4[256+] macht, werden
 sie nicht freigegeben. Der `[VMM] pml4 self-test` (user-dirty=0)
 prüft das beim Boot.
+
+## M9: Slab-Pool wächst monoton, gibt Pages nicht zurück
+`slab::grow()` allokiert 8 Pages pro Aufruf, gibt sie aber nie an `pmm`
+zurück — auch wenn `in_use` auf 0 fällt. Bei S13c/d (TCB → Slab 4096)
+wächst der Slab-Pool bei `bench 100` um ~100 Pages, bei `bench 300`
+um ~300 Pages. `slab.in_use` fällt korrekt auf Baseline, aber `pmm.used`
+bleibt erhöht (`bench 300`: 2446 statt 2130).
+
+**Kapazität:** ~2000 Tasks pro Session (2000 × 4 KiB = 8 MiB Slab + Heap).
+Danach `heap: oom` → `hal::panic`. Für A8 (Sleep) und User-Workloads
+(5-10 Tasks) irrelevant. Für Stresstests (`bench 500+`) relevant.
+
+**Fix:** Slab-Shrink — wenn `in_use == 0` in einer Klasse, `pmm::free_n()`
+alle Pages, die `grow()` allokiert hat. ~100 LOC. Nicht jetzt — gehört
+zu S20+ wenn SMP + Pressure-Tests kommen.

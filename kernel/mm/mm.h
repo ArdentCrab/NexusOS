@@ -26,7 +26,7 @@ u64  free_count();
 // nexus.cpp nutzt sie unqualifiziert.
 
 namespace slab {
-static constexpr int NCLASSES = 6;
+static constexpr int NCLASSES = 8;   // 32,64,128,256,512,1024,2048,4096
 void* alloc(usize requested);
 void  free(void* p);
 u64   total();

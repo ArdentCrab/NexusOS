@@ -19,3 +19,7 @@ backups/
 limine/
 limine-src/
 limine-tool/
+
+# Lokale Backups (alle Verzeichnisse)
+*.before-*
+*.after-*
