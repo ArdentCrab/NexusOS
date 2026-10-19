@@ -51,4 +51,12 @@ i64  sys_open(u64 u_name, u64 flags);
 i64  sys_close(u64 fd);
 i64  sys_read(u64 fd, u64 buf, u64 len);
 
+enum : u32 {
+    SEEK_SET = 0,
+    SEEK_CUR = 1,
+    SEEK_END = 2,
+};
+
+i64  sys_lseek(u64 fd, i64 offset, u32 whence);
+
 #endif

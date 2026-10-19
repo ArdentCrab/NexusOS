@@ -360,6 +360,7 @@ static void cmd_help() {
         "  trunc <name>           truncate file to 0 bytes\n"
         "  writetrunc <name> <text>  sys_open(O_TRUNC) + write + close\n"
         "  cat <name>             read file\n"
+        "  lseek <name> <o> <w>   set file offset (w: 0=SET 1=CUR 2=END)\n"
         "  ls                     list files\n"
         "  rm <name>              remove file\n"
         "  edit <name>            edit a text file\n"
@@ -731,6 +732,42 @@ static void cmd_trunc(int ac, char** av) {
     int r = fs::write_file(av[1], "", 0);
     if (r < 0) hal::pf("trunc error %d\n", r);
     else       hal::ps("OK\n");
+}
+
+
+static void cmd_lseek(int ac, char** av) {
+    if (ac < 4) { hal::ps("usage: lseek <name> <offset> <whence 0=SET 1=CUR 2=END>\n"); return; }
+    const char* name = av[1];
+    u64 off_u = 0, whence_u = 0;
+    if (!parse_num(av[2], &off_u) || !parse_num(av[3], &whence_u)) {
+        hal::ps("bad number\n"); return;
+    }
+    if (whence_u > 2) { hal::ps("whence must be 0, 1, or 2\n"); return; }
+
+    i64 fd = sys_open_kernel(name, O_RDONLY);
+    if (fd < 0) { hal::pf("open('%s') -> %d\n", name, (i32)fd); return; }
+
+    i64 r = sys_lseek((u64)fd, (i64)off_u, (u32)whence_u);
+    if (r < 0) {
+        hal::pf("lseek -> %d (E_INVAL)\n", (i32)r);
+        sys_close((u64)fd);
+        return;
+    }
+    hal::pf("new offset = %ld\n", r);
+
+    char buf[33];
+    i64 n = sys_read_kernel((int)fd, buf, 32);
+    if (n > 0) {
+        buf[n] = 0;
+        // Newlines fuer Ausgabe entschaerfen
+        for (i64 i = 0; i < n; i++) if (buf[i] == '\n') buf[i] = ' ';
+        hal::pf("read 32 bytes @ %ld: '%s'\n", r, buf);
+    } else if (n == 0) {
+        hal::pf("EOF at %ld\n", r);
+    } else {
+        hal::pf("read -> %d\n", (i32)n);
+    }
+    sys_close((u64)fd);
 }
 
 static void cmd_cat(int ac, char** av) {
@@ -1212,6 +1249,7 @@ static void dispatch() {
     if (streq(c, "trunc"))                     { cmd_trunc(argc, argv); return; }
     if (streq(c, "writetrunc"))                 { cmd_writetrunc(argc, argv); return; }
     if (streq(c, "cat"))                       { cmd_cat(argc, argv); return; }
+    if (streq(c, "lseek"))                     { cmd_lseek(argc, argv); return; }
     if (streq(c, "ls"))                        { cmd_ls(); return; }
     if (streq(c, "rm"))                        { cmd_rm(argc, argv); return; }
     if (streq(c, "bmtest"))                    { cmd_bmtest(); return; }

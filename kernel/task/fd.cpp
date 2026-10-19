@@ -180,3 +180,25 @@ i64 sys_read(u64 fd, u64 buf, u64 len) {
     return sys_read_kernel((int)fd, (void*)buf, len);
 }
 
+// lseek(fd, offset, whence) — setzt den Datei-Offset.
+// Semantik: POSIX. Rueckgabe = neuer Offset (>=0) oder -errno.
+i64 sys_lseek(u64 fd, i64 offset, u32 whence) {
+    if (fd < 3 || fd >= FD_MAX) return (i64)E_BADF;
+    task::TCB* t = task::current;
+    if (!t) return (i64)E_BADF;
+    FileDesc* d = &t->fds[fd];
+    if (!d->in_use) return (i64)E_BADF;
+
+    i64 base = 0;
+    if      (whence == SEEK_SET) base = 0;
+    else if (whence == SEEK_CUR) base = (i64)d->offset;
+    else if (whence == SEEK_END) base = (i64)d->size;
+    else return (i64)E_INVAL;
+
+    i64 new_off = base + offset;
+    if (new_off < 0) return (i64)E_INVAL;
+    // Erlaube Offset > size (POSIX: naechstes write extendet die Datei)
+    d->offset = (u64)new_off;
+    return new_off;
+}
+

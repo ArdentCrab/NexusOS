@@ -93,6 +93,9 @@ extern "C" u64 syscall_dispatch(u64* regs) {
         }
         return (u64)E_BADF;
     }
+    if (nr == 8) {   // lseek(fd, offset, whence)
+        return (u64)sys_lseek(a0, (i64)a1, (u32)a2);
+    }
     if (nr == 39) {  // getpid()
         task::TCB* t = task::current;
         return t ? t->pid : 0;
