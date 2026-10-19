@@ -496,3 +496,52 @@ i64 basename_of(const char* path, char* out, u32 out_max) {
   out[len] = 0; return (i64)len;
 }
 } // namespace fs (A7a)
+
+namespace fs {
+
+bool dir_exists(const char* path) {
+    Path p;
+    if (parse_path(path, &p) < 0) return false;
+    char norm[256];
+    if (build_path(&p, norm, sizeof(norm)) < 0) return false;
+    u64 h = hash_name(norm);
+    idx::Rec* r = idx::find(idx::NS_DIR | h);
+    return r && r->type == (u32)idx::Type::DIR;
+}
+
+i64 fs_mkdir(const char* path) {
+    Path p;
+    if (parse_path(path, &p) < 0) return FS_E_INVAL;
+    if (p.n == 0) return FS_E_INVAL;
+    char norm[256];
+    if (build_path(&p, norm, sizeof(norm)) < 0) return FS_E_NAMETOOLONG;
+    if (dir_exists(norm)) return -17;
+    for (u32 k = 1; k < p.n; k++) {
+        Path par; par.n = k;
+        for (u32 i = 0; i < k; i++) {
+            u32 j = 0; while (p.parts[i][j]) { par.parts[i][j] = p.parts[i][j]; j++; }
+            par.parts[i][j] = 0;
+        }
+        char pbuf[256];
+        if (build_path(&par, pbuf, sizeof(pbuf)) < 0) return FS_E_NAMETOOLONG;
+        if (!dir_exists(pbuf)) return -2;
+    }
+    u64 h = hash_name(norm);
+    idx::put(idx::NS_DIR | h, idx::Type::DIR, 0, 0);
+    return 0;
+}
+
+// A7b-1: prüft noch NICHT ob Verzeichnis leer ist (kommt in A7b-2)
+i64 fs_rmdir(const char* path) {
+    Path p;
+    if (parse_path(path, &p) < 0) return FS_E_INVAL;
+    if (p.n == 0) return FS_E_INVAL;
+    char norm[256];
+    if (build_path(&p, norm, sizeof(norm)) < 0) return FS_E_NAMETOOLONG;
+    if (!dir_exists(norm)) return -2;
+    u64 h = hash_name(norm);
+    idx::remove(idx::NS_DIR | h);
+    return 0;
+}
+
+} // namespace fs (A7b-1)

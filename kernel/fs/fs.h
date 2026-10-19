@@ -49,6 +49,10 @@ i64 dirname_of(const char* path, char* out, u32 out_max);
 // Liefert den letzten Komponenten "/a/b/c" -> "c". Rueckgabe Laenge oder -errno.
 i64 basename_of(const char* path, char* out, u32 out_max);
 
+i64 fs_mkdir(const char* path);
+i64 fs_rmdir(const char* path);
+bool dir_exists(const char* path);
+
 } // namespace fs
 
 #endif

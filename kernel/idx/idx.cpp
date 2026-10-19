@@ -175,7 +175,7 @@ struct HashCtx {
 
 // Version-Tag: bei Format-Aenderung erhoehen.
 // Alte Checkpoints matchen dann nicht mehr, statt stumm falsch zu sein.
-static constexpr u64 HASH_TAG = 0x4E4558555332ULL;  // "NEXUS2" (Extent-Chain-FS)
+static constexpr u64 HASH_TAG = 0x4E4558555333ULL;  // "NEXUS2" (Extent-Chain-FS)
 
 static void hash_mix(HashCtx* c, u64 x) {
     for (int i = 0; i < 8; i++) {
@@ -185,7 +185,7 @@ static void hash_mix(HashCtx* c, u64 x) {
 }
 
 static bool type_is_persistent(u32 t) {
-    return t == 1 || t == 4 || t == 5 || t == 6;   // CONFIG, SYS, FILE, NAME
+    return t == 1 || t == 4 || t == 5 || t == 6 || t == 7;   // CONFIG, SYS, FILE, NAME
 }
 
 static bool hash_include(u32 t, const HashCtx* c) {

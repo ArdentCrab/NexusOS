@@ -362,6 +362,9 @@ static void cmd_help() {
         "  cat <name>             read file\n"
         "  lseek <name> <o> <w>   set file offset (w: 0=SET 1=CUR 2=END)\n"
         "  pathtest <path>        parse/dirname/basename (A7a)\n"
+        "  mkdir <path>           create directory (A7b-1)\n"
+        "  rmdir <path>           remove directory (A7b-1)\n"
+        "  pwd-test <path>        check dir_exists (A7b-1)\n"
         "  sleep <ms>             sleep N milliseconds (cap 30s)\n"
         "  ls                     list files\n"
         "  rm <name>              remove file\n"
@@ -750,6 +753,27 @@ static void cmd_pathtest(int ac, char** av) {
   if (n < 0) hal::pf("dirname -> %ld\n", n); else hal::pf("dirname: %s\n", b);
   n = fs::basename_of(av[1], b, sizeof(b));
   if (n < 0) hal::pf("basename -> %ld\n", n); else hal::pf("basename: %s\n", b);
+}
+
+static void cmd_mkdir(int ac, char** av) {
+  if (ac < 2) { hal::ps("usage: mkdir <path>\n"); return; }
+  i64 r = fs::fs_mkdir(av[1]);
+  if (r < 0) hal::pf("mkdir %s -> %ld\n", av[1], r);
+  else       hal::pf("OK, mkdir %s\n", av[1]);
+}
+static void cmd_rmdir(int ac, char** av) {
+  if (ac < 2) { hal::ps("usage: rmdir <path>\n"); return; }
+  i64 r = fs::fs_rmdir(av[1]);
+  if (r < 0) hal::pf("rmdir %s -> %ld\n", av[1], r);
+  else       hal::pf("OK, rmdir %s\n", av[1]);
+}
+static void cmd_pwdtest(int ac, char** av) {
+  if (ac < 2) { hal::ps("usage: pwd-test <path>\n"); return; }
+  bool e = fs::dir_exists(av[1]);
+  hal::pf("%s: %s\n", av[1], e ? "EXISTS" : "NOT FOUND");
+}
+static void cmd_lsdirs() {
+  hal::ps("(lsdirs kommt in A7b-2)\n");
 }
 
 static void cmd_lseek(int ac, char** av) {
@@ -1301,6 +1325,10 @@ static void dispatch() {
     if (streq(c, "writetrunc"))                 { cmd_writetrunc(argc, argv); return; }
     if (streq(c, "cat"))                       { cmd_cat(argc, argv); return; }
     if (streq(c, "lseek"))                     { cmd_lseek(argc, argv); return; }
+    if (streq(c, "mkdir"))                     { cmd_mkdir(argc, argv); return; }
+    if (streq(c, "rmdir"))                     { cmd_rmdir(argc, argv); return; }
+    if (streq(c, "lsdirs"))                    { cmd_lsdirs(); return; }
+    if (streq(c, "pwd-test"))                  { cmd_pwdtest(argc, argv); return; }
     if (streq(c, "pathtest"))                 { cmd_pathtest(argc, argv); return; }
     if (streq(c, "sleep"))                     { cmd_sleep(argc, argv); return; }
     if (streq(c, "ls"))                        { cmd_ls(); return; }
