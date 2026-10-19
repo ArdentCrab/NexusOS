@@ -361,6 +361,7 @@ static void cmd_help() {
         "  writetrunc <name> <text>  sys_open(O_TRUNC) + write + close\n"
         "  cat <name>             read file\n"
         "  lseek <name> <o> <w>   set file offset (w: 0=SET 1=CUR 2=END)\n"
+        "  sleep <ms>             sleep N milliseconds (cap 30s)\n"
         "  ls                     list files\n"
         "  rm <name>              remove file\n"
         "  edit <name>            edit a text file\n"
@@ -790,6 +791,17 @@ static void cmd_prio(int ac, char** av) {
     hal::pf("OK, pid=%lu priority=%lu\n", pid, newp);
     if (pid == task::current->pid && newp < 3)
         hal::ps("WARN: current task demoted to <3; may starve\n");
+}
+
+
+static void cmd_sleep(int ac, char** av) {
+    if (ac < 2) { hal::ps("usage: sleep <ms>  (cap 30000)\n"); return; }
+    u64 ms = 0;
+    if (!parse_num(av[1], &ms)) { hal::ps("bad number\n"); return; }
+    hal::pf("sleeping %u ms...\n", (u32)ms);
+    i64 r = task::sys_sleep(ms);
+    if (r < 0) hal::pf("sleep -> %ld\n", r);
+    else       hal::ps("woke up\n");
 }
 
 static void cmd_cat(int ac, char** av) {
@@ -1273,6 +1285,7 @@ static void dispatch() {
     if (streq(c, "writetrunc"))                 { cmd_writetrunc(argc, argv); return; }
     if (streq(c, "cat"))                       { cmd_cat(argc, argv); return; }
     if (streq(c, "lseek"))                     { cmd_lseek(argc, argv); return; }
+    if (streq(c, "sleep"))                     { cmd_sleep(argc, argv); return; }
     if (streq(c, "ls"))                        { cmd_ls(); return; }
     if (streq(c, "rm"))                        { cmd_rm(argc, argv); return; }
     if (streq(c, "bmtest"))                    { cmd_bmtest(); return; }

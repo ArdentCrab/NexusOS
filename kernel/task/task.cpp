@@ -3,6 +3,8 @@
 #include "kernel/idx/idx.h"
 #include "kernel/mm/mm.h"
 
+extern volatile u64 g_tick;
+
 namespace task {
 static u64 next_pid = 1;
 TCB* current = nullptr;
@@ -178,6 +180,22 @@ i64 sys_getpriority(u64 pid) {
     TCB* t = (TCB*)r->a;
     if (!t) return (i64)-3;
     return (i64)t->priority;
+}
+
+// sys_sleep(ms) — kooperatives Sleep via hlt-Loop.
+// - Waehrend hlt IRQs enabled: Scheduler laeuft, andere Tasks progress.
+// - Unser Task wird von IRQ preempted und am hlt-Punkt resumed.
+// - Stack waechst nicht (IRQ balanced push/pop).
+// - Cap 30000 ms um Endlos-Hang zu verhindern.
+i64 sys_sleep(u64 ms) {
+    if (!current) return (i64)-22;   // EINVAL
+    if (ms < 10) return 0;           // zu kurz, nichts zu tun
+    if (ms > 30000) ms = 30000;      // 30s Cap
+    u64 target = g_tick + (ms / 10);
+    while (g_tick < target) {
+        __asm__ volatile("sti; hlt");
+    }
+    return 0;
 }
 
 } // namespace task (reopened)

@@ -41,7 +41,9 @@ void dump_current();
 
 // Syscall-API (syscall.cpp ruft diese)
 i64 sys_setpriority(u64 pid, u64 prio);  // 0=OK, <0=-errno
-i64 sys_getpriority(u64 pid);            // 0..10, <0=-errno
+i64 sys_getpriority(u64 pid);
+
+i64 sys_sleep(u64 ms);            // 0..10, <0=-errno
 
 
 } // namespace task
