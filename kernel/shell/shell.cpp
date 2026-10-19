@@ -1063,7 +1063,13 @@ static void cmd_bmtest() {
             (u32)(fs::bm_write_count() - start_writes));
 }
 
-static void cmd_ls() { fs::ls_files(); }
+static void cmd_ls(int ac, char** av) {
+  if (ac >= 2) {
+    fs::fs_ls_dir(av[1]);
+  } else {
+    fs::fs_ls_dir(task::current->cwd);
+  }
+}
 static void cmd_rm(int ac, char** av) {
     if (ac < 2) { hal::ps("usage: rm <name>\n"); return; }
     if (fs::rm_file(av[1]) == 0) hal::pf("removed: %s\n", av[1]);
@@ -1359,7 +1365,7 @@ static void dispatch() {
     if (streq(c, "pwd"))                      { cmd_pwd(); return; }
     if (streq(c, "pathtest"))                 { cmd_pathtest(argc, argv); return; }
     if (streq(c, "sleep"))                     { cmd_sleep(argc, argv); return; }
-    if (streq(c, "ls"))                        { cmd_ls(); return; }
+    if (streq(c, "ls"))                        { cmd_ls(argc, argv); return; }
     if (streq(c, "rm"))                        { cmd_rm(argc, argv); return; }
     if (streq(c, "bmtest"))                    { cmd_bmtest(); return; }
     if (streq(c, "hash"))                      { cmd_hash(argc, argv); return; }

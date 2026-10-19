@@ -68,6 +68,11 @@ i64  fs_write_abs(const char* abs, const char* content, usize len);
 i64  fs_cat_abs(const char* abs, char* out, usize out_max);
 void migrate_files_v2();
 
+
+// A7b-3b: absolute pfad-based
+i64  fs_rm_abs(const char* abs);
+void fs_ls_dir(const char* path);
+
 } // namespace fs
 
 #endif

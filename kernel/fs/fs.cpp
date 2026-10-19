@@ -446,26 +446,27 @@ void ls_files() {
 }
 
 int rm_file(const char* name) {
-    u64 h = hash_name(name);
-    u64 fkey = idx::NS_FILE | h;
-    u64 nkey = idx::NS_NAME | h;
-    idx::Rec* r = idx::find(fkey);
-    if (!r || r->type != (u32)idx::Type::FILE) return -1;
+  char abs[256];
+  const char* cwd = task::current ? task::current->cwd : "/";
+  if (fs_resolve(name, cwd, abs, sizeof(abs)) < 0) return -22;
+  return (int)fs_rm_abs(abs);
+}
 
-    u64 size = r->a;
-    u64 ref  = r->b;
-    if (size > 8) {
-        if (size <= 512) {
-            blk_free(ref);
-        } else {
-            fs_release_chain(ref);
-        }
-    }
-
-    idx::remove(fkey);
-    idx::remove(nkey);
-    bitmap_save();   // Batch-Save am Ende der Operation
-    return 0;
+i64 fs_rm_abs(const char* abs) {
+  u64 h = hash_name(abs[0] == '/' ? abs + 1 : abs);
+  u64 fkey = idx::NS_FILE | h;
+  idx::Rec* r = idx::find(fkey);
+  if (!r || r->type != (u32)idx::Type::FILE) return -2;
+  u64 size = r->a, ref = r->b;
+  if (size > 8) {
+    if (size <= 512) blk_free(ref);
+    else fs_release_chain(ref);
+  }
+  idx::remove(fkey);
+  idx::remove(idx::NS_NAME | h);
+  idx::remove(idx::NS_PATH | h);
+  bitmap_save();
+  return 0;
 }
 
 }  // namespace fs
@@ -645,6 +646,50 @@ void fs_lsdirs() {
     hal::ps("dirs:\n");
     idx::scan(idx::Type::DIR, _ls_visit, &c);
     hal::pf("  total: %u\n", c.n);
+}
+
+
+
+// A7b-3b: ls_dir mit parent-hash-Filter
+struct _LsDirCtx { u64 parent_hash; u32 count; };
+static void _ls_dir_visit(idx::Rec* r, void* v) {
+  _LsDirCtx* c = (_LsDirCtx*)v;
+  if (r->a != c->parent_hash) return;
+  u64 h = r->key & 0x00FFFFFFFFFFFFFFULL;
+  idx::Rec* fr = idx::find(idx::NS_FILE | h);
+  if (!fr || fr->type != (u32)idx::Type::FILE) return;
+  idx::Rec* nr = idx::find(idx::NS_NAME | h);
+  char nm[20]; int nn = 0;
+  if (nr) {
+    for (int i = 0; i < 8; i++) {
+      char ch = (char)((nr->a >> (i*8)) & 0xFF);
+      if (!ch) break;
+      nm[nn++] = ch;
+    }
+  }
+  nm[nn] = 0;
+  c->count++;
+  hal::ps("  ");
+  if (nn > 0) { hal::ps(nm); int pad = 16 - nn; while (pad-- > 0) hal::pc(' '); }
+  else        { hal::ps("?               "); }
+  hal::pf("size=%u  ref=", (u32)fr->a);
+  if (fr->a <= 8) hal::ps("(inline)");
+  else if (fr->a <= 512) hal::pf("sect@%p", fr->b);
+  else hal::pf("chain@%p", fr->b);
+  hal::pc('\n');
+}
+
+void fs_ls_dir(const char* path) {
+  char abs[256];
+  const char* cwd = task::current ? task::current->cwd : "/";
+  if (fs_resolve(path, cwd, abs, sizeof(abs)) < 0) {
+    hal::pf("ls: resolve error\n"); return;
+  }
+  if (!dir_exists(abs)) { hal::pf("ls: %s: not found\n", abs); return; }
+  _LsDirCtx c = { hash_name(abs), 0 };
+  hal::pf("files in %s:\n", abs);
+  idx::scan(idx::Type::PATH, _ls_dir_visit, &c);
+  hal::pf("  total: %u\n", c.count);
 }
 
 } // namespace fs (A7b-1)
