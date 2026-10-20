@@ -86,6 +86,7 @@ extern "C" u64 syscall_dispatch(u64* regs) {
             if (!t) return (u64)E_BADF;
             FileDesc* d = &t->fds[a0];
             if (!d->in_use) return (u64)E_BADF;
+            if (d->kind == 2) return (u64)ipc::pipe_write((int)d->pipe_idx, (const u8*)a1, a2);
             if (!(d->flags & O_WRONLY)) return (u64)E_BADF;
 
             // NEXUS append-by-default. O_APPEND erzwingt Append (POSIX-Vorrang),
