@@ -1,5 +1,6 @@
 // kernel/syscall/syscall.cpp — Refactor Session 9
 #include "kernel/syscall/syscall.h"
+#include "kernel/ipc/ipc.h"
 #include "kernel/syscall/per_cpu.h"
 #include "kernel/task/task.h"
 #include "kernel/task/fd.h"
@@ -37,6 +38,32 @@ extern "C" u64 syscall_dispatch(u64* regs) {
     u64 a1 = regs[4];   // rsi
     u64 a2 = regs[3];   // rdx
 
+    if (nr == 50) {  // publish(key, type, a, b)
+        ipc::publish(a0, (u8)a1, a2, regs[1]);
+        return 0;
+    }
+    if (nr == 51) {  // subscribe(type_filter)
+        task::TCB* t = task::current;
+        if (!t) return (u64)(i64)-3;
+        i64 h = ipc::sub_alloc(t->subs, a0);
+        return (u64)h;
+    }
+    if (nr == 52) {  // wait(handle, out_ptr, timeout_ms)
+        task::TCB* t = task::current;
+        if (!t) return (u64)(i64)-3;
+        if (!vmm::user_range_ok(a1, 16, true)) return (u64)(i64)-14;
+        u64 k = 0, av = 0;
+        i64 r = ipc::wait_event(t->subs, a0, a2, &k, &av);
+        if (r < 0) return (u64)r;
+        *(u64*)(a1 + 0) = k;
+        *(u64*)(a1 + 8) = av;
+        return 0;
+    }
+    if (nr == 53) {  // unsubscribe(handle)
+        task::TCB* t = task::current;
+        if (!t) return (u64)(i64)-3;
+        return (u64)ipc::sub_unsubscribe(t->subs, a0);
+    }
     if (nr == 0) {   // read(fd, buf, len)
         return (u64)sys_read(a0, a1, a2);
     }

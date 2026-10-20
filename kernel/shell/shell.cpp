@@ -362,6 +362,9 @@ static void cmd_help() {
         "  cat <name>             read file\n"
         "  lseek <name> <o> <w>   set file offset (w: 0=SET 1=CUR 2=END)\n"
         "  pathtest <path>        parse/dirname/basename (A7a)\n"
+        "  pub <key> <a> [<b>]    publish event (A9)\n"
+        "  sub <type> [<ms>]      subscribe + wait (A9)\n"
+        "  sub-reset              reset event cursor (A9)\n"
         "  mkdir <path>           create directory (A7b-1)\n"
         "  rmdir <path>           remove directory (A7b-1)\n"
         "  pwd-test <path>        check dir_exists (A7b-1)\n"
@@ -441,6 +444,7 @@ static void cmd_get(int ac, char** av) {
         case idx::Type::FILE:    tname = "FILE";    break;
         case idx::Type::NAME:    tname = "NAME";    break;
         case idx::Type::DIR:     tname = "DIR";     break;
+        case idx::Type::PATH:    tname = "PATH";    break;
     }
     hal::pf("%p  type=%s  a=%p  b=%p\n", key, tname, r->a, r->b);
 }
@@ -800,6 +804,44 @@ static void cmd_cd(int ac, char** av) {
 }
 static void cmd_pwd() {
   hal::pf("%s\n", task::current->cwd);
+}
+
+static void cmd_pub(int ac, char** av) {
+    if (ac < 3) { hal::ps("usage: pub <key> <a> [<b>]\n"); return; }
+    u64 k = 0, a = 0, b = 0;
+    if (!parse_num(av[1], &k) || !parse_num(av[2], &a)) { hal::ps("bad number\n"); return; }
+    if (ac >= 4 && !parse_num(av[3], &b)) { hal::ps("bad number\n"); return; }
+    ipc::publish(k, 0, a, b);
+    hal::pf("OK, published key=0x%lx a=0x%lx seq=%lu\n", k, a, ipc::next_seq() - 1);
+}
+
+static u64 g_shell_last_seq = 0;  // A9: persistent event cursor
+
+static void cmd_sub(int ac, char** av) {
+    if (ac < 2) { hal::ps("usage: sub <type_filter> [<timeout_ms>]\n"); return; }
+    u64 tf = 0, tout = 1000;
+    if (!parse_num(av[1], &tf)) { hal::ps("bad number\n"); return; }
+    if (ac >= 3 && !parse_num(av[2], &tout)) { hal::ps("bad number\n"); return; }
+    task::TCB* t = task::current;
+    i64 h = ipc::sub_alloc(t->subs, tf);
+    if (h < 0) { hal::pf("subscribe -> %ld\n", h); return; }
+    t->subs[h].last_seq = g_shell_last_seq;
+    hal::pf("waiting %lu ms (from seq %lu)...\n", tout, g_shell_last_seq);
+    u64 k = 0, a = 0;
+    i64 r = ipc::wait_event(t->subs, (u64)h, tout, &k, &a);
+    if (r == 0) {
+        g_shell_last_seq = t->subs[h].last_seq;
+        hal::pf("EVENT: key=0x%lx a=0x%lx seq=%lu\n", k, a, g_shell_last_seq);
+    }
+    else if (r == -11) hal::ps("no event (EAGAIN)\n");
+    else if (r == -110)hal::ps("timeout\n");
+    else               hal::pf("wait -> %ld\n", r);
+    ipc::sub_unsubscribe(t->subs, (u64)h);
+}
+
+static void cmd_sub_reset() {
+    g_shell_last_seq = 0;
+    hal::ps("OK, event cursor reset to 0\n");
 }
 
 static void cmd_lseek(int ac, char** av) {
@@ -1357,6 +1399,9 @@ static void dispatch() {
     if (streq(c, "writetrunc"))                 { cmd_writetrunc(argc, argv); return; }
     if (streq(c, "cat"))                       { cmd_cat(argc, argv); return; }
     if (streq(c, "lseek"))                     { cmd_lseek(argc, argv); return; }
+    if (streq(c, "pub"))                       { cmd_pub(argc, argv); return; }
+    if (streq(c, "sub"))                       { cmd_sub(argc, argv); return; }
+    if (streq(c, "sub-reset"))                 { cmd_sub_reset(); return; }
     if (streq(c, "mkdir"))                     { cmd_mkdir(argc, argv); return; }
     if (streq(c, "rmdir"))                     { cmd_rmdir(argc, argv); return; }
     if (streq(c, "lsdirs"))                    { cmd_lsdirs(); return; }

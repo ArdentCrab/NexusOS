@@ -35,6 +35,7 @@ TCB* spawn_full(const char* name, void(*fn)(void*), void* arg,
     t->priority = 5;   // default
     t->wake_tick = 0;
     t->cwd[0] = '/'; t->cwd[1] = 0;
+    for (u32 i = 0; i < ipc::SUB_MAX; i++) t->subs[i].used = false;
     t->pml4_phys         = pml4_phys;
     t->user_entry_va     = entry_va;
     t->user_stack_top_va = stack_top;

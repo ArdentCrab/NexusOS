@@ -4,6 +4,7 @@
 
 #include "kernel/hal/hal.h"
 #include "kernel/task/fd.h"
+#include "kernel/ipc/ipc.h"
 
 namespace task {
 
@@ -27,6 +28,9 @@ struct TCB {
 
     // A7b-2: current working directory
     char cwd[128];
+
+    // A9: Subscriptions
+    ipc::Subscription subs[ipc::SUB_MAX];
 };
 
 extern TCB* current;
