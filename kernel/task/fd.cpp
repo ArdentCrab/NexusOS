@@ -1,5 +1,6 @@
 // kernel/task/fd.cpp — Refactor Session 8
 #include "kernel/task/fd.h"
+#include "kernel/ipc/pipe.h"
 #include "kernel/idx/idx.h"
 #include "kernel/task/task.h"
 #include "kernel/fs/fs.h"
@@ -144,8 +145,15 @@ i64 sys_close(u64 fd) {
     if (fd < 3 || fd >= FD_MAX) return (i64)E_BADF;
     task::TCB* t = task::current;
     if (!t || !t->fds[fd].in_use) return (i64)E_BADF;
+    FileDesc* d = &t->fds[fd];
+    if (d->kind != 0) {
+        ipc::pipe_close((int)d->pipe_idx, d->kind == 1);
+        d->in_use = 0;
+        d->kind = 0;
+        return (i64)fd;
+    }
     int fr = fd_flush((int)fd);
-    if (fr < 0) return (i64)fr;   // Flush-Fehler nicht schlucken
+    if (fr < 0) return (i64)fr;
     return (i64)fd_free((int)fd);
 }
 
@@ -177,6 +185,13 @@ i64 sys_read(u64 fd, u64 buf, u64 len) {
     if (fd < 3 || fd >= FD_MAX) return (i64)E_BADF;
     if (len == 0) return 0;
     if (!vmm::user_range_ok(buf, len, true)) return (i64)E_FAULT;
+    task::TCB* t = task::current;
+    if (!t) return (i64)E_BADF;
+    FileDesc* d = &t->fds[fd];
+    if (!d->in_use) return (i64)E_BADF;
+    if (d->kind == 1) {
+        return ipc::pipe_read((int)d->pipe_idx, (u8*)buf, len);
+    }
     return sys_read_kernel((int)fd, (void*)buf, len);
 }
 

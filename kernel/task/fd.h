@@ -13,7 +13,8 @@ struct FileDesc {
     u32  flags;      // O_RDONLY / O_WRONLY / O_RDWR / O_CREAT
     u32  in_use;     // 0 = frei, 1 = belegt
     u32  dirty;      // 1 = Puffer weicht von der Datei ab -> Flush bei close
-    u32  _pad;
+    u16  kind;        // 0=file, 1=pipe-read, 2=pipe-write
+    u16  pipe_idx;    // 0..15
     char name[32];   // Dateiname fuer Flush bei close
 };
 enum : u32 {

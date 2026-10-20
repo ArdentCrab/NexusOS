@@ -1,6 +1,7 @@
 // kernel/syscall/syscall.cpp — Refactor Session 9
 #include "kernel/syscall/syscall.h"
 #include "kernel/ipc/ipc.h"
+#include "kernel/ipc/pipe.h"
 #include "kernel/syscall/per_cpu.h"
 #include "kernel/task/task.h"
 #include "kernel/task/fd.h"
@@ -119,6 +120,28 @@ extern "C" u64 syscall_dispatch(u64* regs) {
             return a2;
         }
         return (u64)E_BADF;
+    }
+    if (nr == 22) {  // pipe(fds[2]) — A9b
+        task::TCB* t = task::current;
+        if (!t) return (u64)(i64)-3;
+        if (!vmm::user_range_ok(a0, 8, true)) return (u64)(i64)-14;
+        int r_idx = -1, w_idx = -1;
+        i64 r = ipc::pipe_alloc(&r_idx, &w_idx);
+        if (r < 0) return (u64)r;
+        int rfd = fd_alloc();
+        int wfd = fd_alloc();
+        if (rfd < 0 || wfd < 0) {
+            if (rfd >= 0) fd_free(rfd);
+            if (wfd >= 0) fd_free(wfd);
+            ipc::pipe_close(r_idx, true);
+            ipc::pipe_close(w_idx, false);
+            return (u64)(i64)-23;
+        }
+        t->fds[rfd].kind = 1; t->fds[rfd].pipe_idx = (u16)r_idx;
+        t->fds[wfd].kind = 2; t->fds[wfd].pipe_idx = (u16)w_idx;
+        *(u64*)(a0 + 0) = (u64)rfd;
+        *(u64*)(a0 + 8) = (u64)wfd;
+        return 0;
     }
     if (nr == 8) {   // lseek(fd, offset, whence)
         return (u64)sys_lseek(a0, (i64)a1, (u32)a2);
