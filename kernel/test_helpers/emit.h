@@ -22,6 +22,7 @@
 void emit_user_program(u8* code, const char* msg, u32 msg_len);
 void emit_kernptr_program(u8* code);
 void emit_badptr_program(u8* code);
+void emit_pipe_test_program(u8* code);
 void emit_a3e_program(u8* code, u8 seed);
 
 #endif

@@ -181,4 +181,92 @@ void emit_a3e_program(u8* code, u8 seed) {
 
     // Seed byte bei Offset 0x180
     code[0x180] = seed;
+
+// A9e: pipe_test. Ruft sys_pipe, sys_write, sys_read, sys_exit.
+// msg = "hi" (2 bytes) inline. Exit-Code = 'h' = 104 bei Erfolg.
+
+
+}
+
+void emit_pipe_test_program(u8* code) {
+    auto w8 = [](u8* p, u8 v){ *p = v; };
+    auto w32 = [](u8* p, u32 v){ p[0]=v; p[1]=v>>8; p[2]=v>>16; p[3]=v>>24; };
+    u32 off = 0;
+
+    // sub rsp, 16
+    w8(code+off++, 0x48); w8(code+off++, 0x83); w8(code+off++, 0xEC); w8(code+off++, 0x10);
+    // mov rax, 22 (sys_pipe)
+    w8(code+off++, 0x48); w8(code+off++, 0xC7); w8(code+off++, 0xC0);
+    w32(code+off, 22); off += 4;
+    // mov rdi, rsp
+    w8(code+off++, 0x48); w8(code+off++, 0x89); w8(code+off++, 0xE7);
+    // syscall
+    w8(code+off++, 0x0F); w8(code+off++, 0x05);
+    // test rax, rax
+    w8(code+off++, 0x48); w8(code+off++, 0x85); w8(code+off++, 0xC0);
+    // jnz .err (patch spaeter)
+    u32 patch_jnz = off;
+    w8(code+off++, 0x75); w8(code+off++, 0x00);
+    // mov r12, [rsp]     ; read_fd
+    w8(code+off++, 0x4C); w8(code+off++, 0x8B); w8(code+off++, 0x24); w8(code+off++, 0x24);
+    // mov r13, [rsp+8]   ; write_fd
+    w8(code+off++, 0x4C); w8(code+off++, 0x8B); w8(code+off++, 0x6C); w8(code+off++, 0x24); w8(code+off++, 0x08);
+    // sub rsp, 16        ; buf
+    w8(code+off++, 0x48); w8(code+off++, 0x83); w8(code+off++, 0xEC); w8(code+off++, 0x10);
+    // mov rax, 1 (sys_write)
+    w8(code+off++, 0x48); w8(code+off++, 0xC7); w8(code+off++, 0xC0);
+    w32(code+off, 1); off += 4;
+    // mov rdi, r13
+    w8(code+off++, 0x4C); w8(code+off++, 0x89); w8(code+off++, 0xEF);
+    // lea rsi, [rip+msg]  msg @ off 256
+    w8(code+off++, 0x48); w8(code+off++, 0x8D); w8(code+off++, 0x35);
+    i32 disp = (i32)256 - (i32)(off + 4);
+    w32(code+off, (u32)disp); off += 4;
+    // mov rdx, 2
+    w8(code+off++, 0x48); w8(code+off++, 0xC7); w8(code+off++, 0xC2);
+    w32(code+off, 2); off += 4;
+    // syscall
+    w8(code+off++, 0x0F); w8(code+off++, 0x05);
+    // mov rax, 0 (sys_read)
+    w8(code+off++, 0x48); w8(code+off++, 0xC7); w8(code+off++, 0xC0);
+    w32(code+off, 0); off += 4;
+    // mov rdi, r12
+    w8(code+off++, 0x4C); w8(code+off++, 0x89); w8(code+off++, 0xE7);
+    // mov rsi, rsp
+    w8(code+off++, 0x48); w8(code+off++, 0x89); w8(code+off++, 0xE6);
+    // mov rdx, 2
+    w8(code+off++, 0x48); w8(code+off++, 0xC7); w8(code+off++, 0xC2);
+    w32(code+off, 2); off += 4;
+    // syscall
+    w8(code+off++, 0x0F); w8(code+off++, 0x05);
+    // movzx rdi, byte [rsp]
+    w8(code+off++, 0x0F); w8(code+off++, 0xB6); w8(code+off++, 0x3C); w8(code+off++, 0x24);
+    // mov rax, 60 (sys_exit)
+    w8(code+off++, 0x48); w8(code+off++, 0xC7); w8(code+off++, 0xC0);
+    w32(code+off, 60); off += 4;
+    // syscall
+    w8(code+off++, 0x0F); w8(code+off++, 0x05);
+    // jmp $
+    w8(code+off++, 0xEB); w8(code+off++, 0xFE);
+
+    // .err:
+    u32 err_off = off;
+    // mov rdi, 0xFF
+    w8(code+off++, 0x48); w8(code+off++, 0xC7); w8(code+off++, 0xC7);
+    w32(code+off, 0xFF); off += 4;
+    // mov rax, 60
+    w8(code+off++, 0x48); w8(code+off++, 0xC7); w8(code+off++, 0xC0);
+    w32(code+off, 60); off += 4;
+    // syscall
+    w8(code+off++, 0x0F); w8(code+off++, 0x05);
+    // jmp $
+    w8(code+off++, 0xEB); w8(code+off++, 0xFE);
+
+    // patch jnz
+    i32 jdisp = (i32)err_off - (i32)(patch_jnz + 2);
+    code[patch_jnz + 1] = (u8)(i8)jdisp;
+
+    // msg @ off 256
+    code[256] = 'h';
+    code[257] = 'i';
 }

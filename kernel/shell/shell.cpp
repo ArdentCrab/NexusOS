@@ -9,6 +9,7 @@
 #include "kernel/task/fd.h"
 #include "kernel/elf64/elf64.h"
 #include "kernel/test_helpers/layout.h"
+#include "kernel/test_helpers/emit.h"
 #include "kernel/dev/kbd.h"
 #include "kernel/dev/pci.h"
 #include "kernel/dev/virtio_blk.h"
@@ -169,6 +170,52 @@ static void emit_argtest_program(u8* code) {
 //   4 Pages User-Stack bei USER_STACK_VA..+0x4000
 //   argc/argv[0] auf der hoechsten Stack-Page
 // Dann iretq nach USER_CODE_VA.
+
+// A9e: pipe_test aus Ring-3
+static task::TCB* spawn_pipe_test_task() {
+    u64 code_phys  = mem::pmm::alloc();
+    if (!code_phys) return nullptr;
+    u64 pml4 = vmm::alloc_pml4();
+    if (!pml4) { mem::pmm::free_n(code_phys, 1); return nullptr; }
+
+    u8* code = (u8*)mem::p2v(code_phys);
+    for (int i = 0; i < 4096; i++) code[i] = 0;
+    emit_pipe_test_program(code);
+
+    const u64 stack_top = USER_STACK_VA + 0x4000;
+    const u64 stack_lo  = stack_top - 0x4000;
+    u64 last_page_phys = 0;
+    for (u64 va = stack_lo; va < stack_top; va += 0x1000) {
+        u64 sp = mem::pmm::alloc();
+        if (!sp) { vmm::free_user_all(pml4); return nullptr; }
+        u8* sk = (u8*)mem::p2v(sp);
+        for (int k = 0; k < 4096; k++) sk[k] = 0;
+        if (!vmm::map_user_page_in(pml4, va, sp, vmm::P_WRITE)) {
+            mem::pmm::free_n(sp, 1);
+            vmm::free_user_all(pml4);
+            return nullptr;
+        }
+        if (va == stack_top - 0x1000) last_page_phys = sp;
+    }
+    (void)last_page_phys;
+
+    if (!vmm::map_user_page_in(pml4, USER_CODE_VA, code_phys, 0)) {
+        vmm::free_user_all(pml4);
+        return nullptr;
+    }
+
+    u64 rsp_user = stack_top - 16;
+    return task::spawn_full("pipetest", user_elf_fn, nullptr,
+                            pml4, USER_CODE_VA, rsp_user);
+}
+
+static void cmd_pipe_test(int ac, char** av) {
+    (void)ac; (void)av;
+    task::TCB* t = spawn_pipe_test_task();
+    if (t) hal::pf("[PIPETEST] spawned pid=%u\n", (u32)t->pid);
+    else   hal::ps("[PIPETEST] spawn failed\n");
+}
+
 static task::TCB* spawn_argtest_task(const char* arg) {
     u64 code_phys  = mem::pmm::alloc();
     if (!code_phys) return nullptr;
@@ -366,6 +413,7 @@ static void cmd_help() {
         "  pub <key> <a> [<b>]    publish event (A9)\n"
         "  piper                  pipe roundtrip test (A9c)\n"
         "  piper-async            producer-task + blocking read (A9d)\n"
+        "  pipe-test              sys_pipe from ring-3 (A9e)\n"
         "  sub <type> [<ms>]      subscribe + wait (A9)\n"
         "  sub-reset              reset event cursor (A9)\n"
         "  mkdir <path>           create directory (A7b-1)\n"
@@ -1451,6 +1499,7 @@ static void dispatch() {
     if (streq(c, "pub"))                       { cmd_pub(argc, argv); return; }
     if (streq(c, "piper"))                     { cmd_piper(argc, argv); return; }
     if (streq(c, "piper-async"))               { cmd_piper_async(argc, argv); return; }
+    if (streq(c, "pipe-test"))                 { cmd_pipe_test(argc, argv); return; }
     if (streq(c, "sub"))                       { cmd_sub(argc, argv); return; }
     if (streq(c, "sub-reset"))                 { cmd_sub_reset(); return; }
     if (streq(c, "mkdir"))                     { cmd_mkdir(argc, argv); return; }

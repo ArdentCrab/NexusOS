@@ -1,5 +1,6 @@
 // kernel/task/task.cpp — Refactor Session 8
 #include "kernel/task/task.h"
+#include "kernel/ipc/pipe.h"
 #include "kernel/idx/idx.h"
 #include "kernel/mm/mm.h"
 
@@ -111,15 +112,21 @@ u64 reap(TCB* skip){
         // gehen, bevor sys_close gerufen wurde.
         if (t) {
             for (int fd = 3; fd < FD_MAX; fd++) {
-                if (t->fds[fd].in_use && t->fds[fd].dirty) {
-                    fd_flush(fd);
+                if (t->fds[fd].in_use) {
+                    if (t->fds[fd].kind != 0) {
+                        ipc::pipe_close((int)t->fds[fd].pipe_idx,
+                                        t->fds[fd].kind == 1);
+                    } else if (t->fds[fd].dirty) {
+                        fd_flush(fd);
+                    }
+                    if (t->fds[fd].ram_buf) {
+                        heap::free((void*)t->fds[fd].ram_buf);
+                        t->fds[fd].ram_buf = 0;
+                    }
+                    t->fds[fd].in_use = 0;
+                    t->fds[fd].dirty = 0;
+                    t->fds[fd].kind = 0;
                 }
-                if (t->fds[fd].ram_buf) {
-                    heap::free((void*)t->fds[fd].ram_buf);
-                    t->fds[fd].ram_buf = 0;
-                }
-                t->fds[fd].in_use = 0;
-                t->fds[fd].dirty = 0;
             }
         }
         if (t && t->kstack_phys && t->kstack_pages) {
