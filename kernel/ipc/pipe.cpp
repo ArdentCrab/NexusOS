@@ -25,7 +25,10 @@ i64 pipe_read(int idx, u8* dst, u64 len) {
     Pipe* p = &g_pipes[idx];
     if (!p->used) return -22;
     if (len == 0) return 0;
-    if (p->count == 0) return -11;  // EAGAIN
+    if (p->count == 0) {
+        if (p->writers == 0) return 0;   // EOF: alle Writer zu
+        return -11;                       // EAGAIN: leer, aber Writer leben
+    }
     u64 n = len < p->count ? len : p->count;
     for (u64 i = 0; i < n; i++) {
         dst[i] = p->buf[p->rpos];
@@ -40,6 +43,7 @@ i64 pipe_write(int idx, const u8* src, u64 len) {
     Pipe* p = &g_pipes[idx];
     if (!p->used) return -22;
     if (len == 0) return 0;
+    if (p->readers == 0) return -32;   // EPIPE: alle Reader zu
     u64 space = PIPE_BUF - p->count;
     if (space == 0) return -11;  // EAGAIN
     u64 n = len < space ? len : space;

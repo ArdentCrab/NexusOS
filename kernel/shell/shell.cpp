@@ -365,6 +365,7 @@ static void cmd_help() {
         "  pathtest <path>        parse/dirname/basename (A7a)\n"
         "  pub <key> <a> [<b>]    publish event (A9)\n"
         "  piper                  pipe roundtrip test (A9c)\n"
+        "  piper-async            producer-task + blocking read (A9d)\n"
         "  sub <type> [<ms>]      subscribe + wait (A9)\n"
         "  sub-reset              reset event cursor (A9)\n"
         "  mkdir <path>           create directory (A7b-1)\n"
@@ -861,6 +862,35 @@ static void cmd_piper(int ac, char** av) {
     hal::ps("'\n");
     ipc::pipe_close(r_idx, true);
     ipc::pipe_close(w_idx, false);
+}
+
+static void producer_fn(void* arg) {
+    int w_idx = (int)(u64)arg;
+    task::sys_sleep(200);  // 200 ms warten
+    const char* msg = "async through pipe";
+    ipc::pipe_write(w_idx, (const u8*)msg, 19);
+    ipc::pipe_close(w_idx, false);
+    for (;;) __asm__ volatile("sti; hlt");
+}
+
+static void cmd_piper_async(int ac, char** av) {
+    (void)ac; (void)av;
+    int r_idx = -1, w_idx = -1;
+    if (ipc::pipe_alloc(&r_idx, &w_idx) < 0) {
+        hal::ps("pipe_alloc fail\n"); return;
+    }
+    task::spawn("producer", producer_fn, (void*)(u64)w_idx);
+    hal::ps("producer started, blocking read...\n");
+    char buf[64];
+    for (;;) {
+        i64 r = ipc::pipe_read(r_idx, (u8*)buf, sizeof(buf));
+        if (r == -11) { __asm__ volatile("sti; hlt"); continue; }
+        hal::pf("read %ld bytes: '", r);
+        for (i64 i = 0; i < r; i++) hal::pc(buf[i]);
+        hal::ps("'\n");
+        break;
+    }
+    ipc::pipe_close(r_idx, true);
 }
 
 static void cmd_lseek(int ac, char** av) {
@@ -1420,6 +1450,7 @@ static void dispatch() {
     if (streq(c, "lseek"))                     { cmd_lseek(argc, argv); return; }
     if (streq(c, "pub"))                       { cmd_pub(argc, argv); return; }
     if (streq(c, "piper"))                     { cmd_piper(argc, argv); return; }
+    if (streq(c, "piper-async"))               { cmd_piper_async(argc, argv); return; }
     if (streq(c, "sub"))                       { cmd_sub(argc, argv); return; }
     if (streq(c, "sub-reset"))                 { cmd_sub_reset(); return; }
     if (streq(c, "mkdir"))                     { cmd_mkdir(argc, argv); return; }
