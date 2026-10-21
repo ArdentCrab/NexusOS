@@ -398,8 +398,8 @@ extern "C" u64 irq_dispatch(Regs* r){
         return (u64)r;
     }
 
-    // Timer
-    pic::eoi(0);
+    // Timer (APIC-Local-Timer, vector 32)
+    apic::eoi();
     g_tick = g_tick + 1;
     this_cpu()->ticks++;
 
@@ -934,8 +934,8 @@ extern "C" void kernel_main(){
 
     pic::remap();
     apic::init();
-    pit::init_hz(100);
-    hal::ps("[OK] PIC + PIT 100 Hz\n");
+    apic::arm(100);
+    hal::ps("[OK] PIC (kbd) + APIC timer 100 Hz\n");
 
     g_cpu.self=&g_cpu; g_cpu.cpu_id=0; g_cpu.apic_id=0;
     g_cpu.current=nullptr; g_cpu.idle=nullptr;
@@ -1039,7 +1039,7 @@ extern "C" void kernel_main(){
     hal::ps("--- type 'help' at the NEXUS> prompt ---\n\n");
 
     // IRQs freischalten
-    pic::unmask(0);                       // Timer
+    // Timer laeuft jetzt ueber APIC, PIC-IRQ 0 bleibt maskiert.
     pic::unmask(1);                       // Keyboard
 
     __asm__ volatile("sti");
