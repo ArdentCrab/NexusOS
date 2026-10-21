@@ -483,6 +483,50 @@ void free_user_all(u64 pml4_phys) {
 
 // Selbsttest fuer A3a: allokiert eine PML4, prueft dass die Kernel-
 // Eintraege geteilt werden, gibt sie wieder frei.
+// A10a: mappt eine physikalische 4K-Page (typisch MMIO) 1:1 in die
+// aktuelle PML4 (Kernel-Half, PML4[256..511]). Weil Kernel-Half in allen
+// User-PML4s geteilt ist, wird sie automatisch ueberall sichtbar.
+// Notwendig, weil HHDM nur RAM abdeckt, nicht MMIO (APIC, IO-APIC).
+bool map_mmio(u64 phys) {
+    // WICHTIG: p2v liefert die VA, unter der der Aufrufer zugreifen will
+    // (HHDM-Offset). Die Page-Tables muessen fuer diese VA gebaut werden,
+    // nicht fuer die phys-Adresse.
+    u64 va = (u64)mem::p2v(phys);
+    u64 pml4_phys = hal::read_cr3();
+    u64* pml4 = table_of(pml4_phys);
+    u64 i4 = (va >> 39) & 0x1FF;
+    u64 i3 = (va >> 30) & 0x1FF;
+    u64 i2 = (va >> 21) & 0x1FF;
+    u64 i1 = (va >> 12) & 0x1FF;
+
+    if (!(pml4[i4] & P_PRESENT)) {
+        u64 new_pdpt = mem::pmm::alloc();
+        if (!new_pdpt) return false;
+        u64* pdpt = table_of(new_pdpt);
+        for (int i = 0; i < 512; i++) pdpt[i] = 0;
+        pml4[i4] = new_pdpt | P_PRESENT | P_WRITE;
+    }
+    u64* pdpt = table_of(pml4[i4]);
+    if (!(pdpt[i3] & P_PRESENT)) {
+        u64 new_pd = mem::pmm::alloc();
+        if (!new_pd) return false;
+        u64* pd = table_of(new_pd);
+        for (int i = 0; i < 512; i++) pd[i] = 0;
+        pdpt[i3] = new_pd | P_PRESENT | P_WRITE;
+    }
+    u64* pd = table_of(pdpt[i3]);
+    if (!(pd[i2] & P_PRESENT)) {
+        u64 new_pt = mem::pmm::alloc();
+        if (!new_pt) return false;
+        u64* pt = table_of(new_pt);
+        for (int i = 0; i < 512; i++) pt[i] = 0;
+        pd[i2] = new_pt | P_PRESENT | P_WRITE;
+    }
+    u64* pt = table_of(pd[i2]);
+    pt[i1] = (phys & ~0xFFFULL) | P_PRESENT | P_WRITE;
+    return true;
+}
+
 void self_test_pml4() {
     u64 test = alloc_pml4();
     if (!test) { hal::ps("[VMM] pml4 self-test: OOM\n"); return; }

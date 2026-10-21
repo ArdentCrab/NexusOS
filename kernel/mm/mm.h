@@ -56,6 +56,7 @@ u64  pte_phys_in(u64 pml4_phys, u64 va);
 bool user_range_ok(u64 va, u64 len, bool need_write);
 void free_user_all(u64 pml4_phys);
 void self_test_pml4();
+bool map_mmio(u64 phys);
 }
 
 #endif

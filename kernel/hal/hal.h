@@ -97,6 +97,8 @@ void init_hz(u32 hz);
 // --- APIC (Stub, später) ---
 namespace apic {
 void init();
+bool is_present();
+void eoi();
 void calibrate();
 void arm(u64);
 u64 period();

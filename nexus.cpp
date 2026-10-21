@@ -933,6 +933,7 @@ extern "C" void kernel_main(){
     virtio_blk::init();
 
     pic::remap();
+    apic::init();
     pit::init_hz(100);
     hal::ps("[OK] PIC + PIT 100 Hz\n");
 
