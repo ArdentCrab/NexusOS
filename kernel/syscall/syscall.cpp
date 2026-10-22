@@ -7,6 +7,7 @@
 #include "kernel/task/fd.h"
 #include "kernel/mm/mm.h"
 #include "kernel/hal/hal.h"
+#include "kernel/dev/net.h"
 
 // A8b: externe Symbole aus nexus.cpp + eigenes Flag (extern "C" für asm)
 extern "C" volatile u32 g_irq_next_mode;
@@ -213,6 +214,31 @@ extern "C" u64 syscall_dispatch(u64* regs) {
         // A8b Session 2: sofort in Scheduler, kein hlt-Wait.
         g_syscall_suspend = 1;
         return (u64)a0;
+    }
+        if (nr == 200) {  // net_ping(dst_ip_be, count, timeout_ms) -> recv_count
+        if (!net::default_iface()) return (u64)(i64)-2;
+        u8 dst[4];
+        dst[0] = (u8)((a0 >> 24) & 0xFF);
+        dst[1] = (u8)((a0 >> 16) & 0xFF);
+        dst[2] = (u8)((a0 >>  8) & 0xFF);
+        dst[3] = (u8)((a0      ) & 0xFF);
+        u32 cnt = (u32)a1;
+        if (cnt == 0) cnt = 1;
+        if (cnt > 10) cnt = 10;
+        u32 to = (u32)a2;
+        if (to == 0) to = 500;
+        u32 got = 0;
+        for (u32 i = 0; i < cnt; i++) {
+            if (net::icmp_ping(dst, to) == 0) got++;
+        }
+        return (u64)got;
+    }
+    if (nr == 201) {  // net_mac(dst_buf6) -> 0 oder neg
+        if (!vmm::user_range_ok(a0, 6, true)) return (u64)(i64)-14;
+        if (!net::default_iface()) return (u64)(i64)-2;
+        net::Iface* f = net::default_iface();
+        for (int i = 0; i < 6; i++) ((u8*)a0)[i] = f->mac[i];
+        return 0;
     }
     return (u64)E_NOSYS;
 }

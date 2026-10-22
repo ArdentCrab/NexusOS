@@ -18,6 +18,7 @@
 #include "kernel/editor/editor.h"
 #include "kernel/trig/trig.h"
 #include "kernel/dev/virtio_net.h"
+#include "kernel/dev/net.h"
 
 // Symbole aus nexus.cpp (S11c: nach main/ oder test_helpers/ verschieben)
 extern void user_ring3_fn(void* arg);
@@ -1492,6 +1493,47 @@ static void cmd_netinfo() {
     virtio_net::stats(&rx, &tx, &rxb, &txb);
     hal::pf("  RX:     %lu pkts, %lu bytes\n", rx, rxb);
     hal::pf("  TX:     %lu pkts, %lu bytes\n", tx, txb);
+    net::Iface* f = net::default_iface();
+    if (f) {
+        hal::pf("  iface %s: ip=%u.%u.%u.%u mask=%u.%u.%u.%u gw=%u.%u.%u.%u\n",
+                f->name,
+                f->ip[0], f->ip[1], f->ip[2], f->ip[3],
+                f->mask[0], f->mask[1], f->mask[2], f->mask[3],
+                f->gw[0], f->gw[1], f->gw[2], f->gw[3]);
+        hal::pf("  IP:     rx=%lu tx=%lu pkts\n",
+                net::stat_rx_ip(), net::stat_tx_ip());
+    }
+}
+
+static void cmd_ping(int ac, char** av) {
+    if (ac < 2) { hal::ps("usage: ping <ip> [count]\n"); return; }
+    u32 count = 3;
+    if (ac >= 3) {
+        u32 v = 0;
+        for (const char* q = av[2]; *q >= '0' && *q <= '9'; q++) v = v * 10 + (u32)(*q - '0');
+        if (v > 0) count = v;
+    }
+    if (count == 0 || count > 10) count = 3;
+
+    u8 ip[4] = {0,0,0,0};
+    int dots = 0, cur = 0;
+    for (const char* p = av[1]; *p && dots < 4; p++) {
+        if (*p == '.') { ip[dots++] = (u8)cur; cur = 0; }
+        else if (*p >= '0' && *p <= '9') cur = cur * 10 + (*p - '0');
+        else break;
+    }
+    if (dots == 3) ip[3] = (u8)cur;
+    else { hal::ps("bad ip\n"); return; }
+
+    if (!net::default_iface()) { hal::ps("no network interface\n"); return; }
+
+    u32 recv = 0;
+    for (u32 i = 0; i < count; i++) {
+        int r = net::icmp_ping(ip, 500);
+        if (r == 0) recv++;
+    }
+    hal::pf("%u transmitted, %u received, %u%% loss\n",
+            count, recv, (count - recv) * 100 / count);
 }
 
 static void cmd_arp(int ac, char** av) {
@@ -1532,6 +1574,7 @@ static void dispatch() {
     if (streq(c, "pci"))                       { cmd_pci(); return; }
     if (streq(c, "netinfo"))                   { cmd_netinfo(); return; }
     if (streq(c, "arp"))                       { cmd_arp(argc, argv); return; }
+    if (streq(c, "ping"))                      { cmd_ping(argc, argv); return; }
     if (streq(c, "blk"))                       { cmd_blk(argc, argv); return; }
     if (streq(c, "sync"))                      { cmd_sync(); return; }
     if (streq(c, "wal"))                       { cmd_wal(); return; }
