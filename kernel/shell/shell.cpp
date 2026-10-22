@@ -932,7 +932,7 @@ static void cmd_piper_async(int ac, char** av) {
     char buf[64];
     for (;;) {
         i64 r = ipc::pipe_read(r_idx, (u8*)buf, sizeof(buf));
-        if (r == -11) { hal::ps("(B1-TEMP: piper-async disabled)\n"); break; }
+        if (r == -11) { __asm__ volatile("sti; hlt"); continue; }
         hal::pf("read %ld bytes: '", r);
         for (i64 i = 0; i < r; i++) hal::pc(buf[i]);
         hal::ps("'\n");

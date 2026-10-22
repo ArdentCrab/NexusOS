@@ -107,8 +107,11 @@ extern "C" u64 syscall_dispatch(u64* regs) {
             FileDesc* d = &t->fds[a0];
             if (!d->in_use) return (u64)E_BADF;
             if (d->kind == 2) {
-                // B1-TEMP: blocking disabled (pipe_write)
-                return (u64)ipc::pipe_write((int)d->pipe_idx, (const u8*)a1, a2);
+                for (;;) {
+                    i64 r = ipc::pipe_write((int)d->pipe_idx, (const u8*)a1, a2);
+                    if (r != -11) return (u64)r;
+                    __asm__ volatile("sti; hlt");
+                }
             }
             if (!(d->flags & O_WRONLY)) return (u64)E_BADF;
 

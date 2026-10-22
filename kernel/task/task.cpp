@@ -197,9 +197,14 @@ i64 sys_getpriority(u64 pid) {
 // - Stack waechst nicht (IRQ balanced push/pop).
 // - Cap 30000 ms um Endlos-Hang zu verhindern.
 i64 sys_sleep(u64 ms) {
-    (void)ms;
-    // B1-TEMP: hlt-Loop triggert iretq-Race. A8b ersetzt das.
-    return (i64)-38;   // -ENOSYS
+    if (!current) return (i64)-22;
+    if (ms < 10) return 0;
+    if (ms > 30000) ms = 30000;
+    u64 target = g_tick + (ms / 10);
+    while (g_tick < target) {
+        __asm__ volatile("sti; hlt");
+    }
+    return 0;
 }
 
 } // namespace task (reopened)
