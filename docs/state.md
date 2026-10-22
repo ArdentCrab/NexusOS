@@ -66,3 +66,21 @@ dumpen, dann theoretisieren.
 
 ## Nächster Meilenstein
 A10c — IO-APIC (siehe roadmap.md)
+
+## A10c-2 (Phase 2, versucht und reverted, 2025-10-22)
+**Versuch:** `ioapic::route(1, 33, 0)` + `pic::unmask(1)` entfernen +
+`pic::eoi(1)` → `apic::eoi()` bei v==33.
+
+**Ergebnis:** Keyboard komplett stumm. Alle Tasten ignoriert, nur Enter
+kommt als leerer Prompt durch. Reproduzierbar über 2 Boots.
+
+**Revert:** `git checkout -- nexus.cpp` (Phase 2 war nicht committet).
+Build neu, Keyboard wieder da, alle Tests grün. Siehe Tag `v0.9-a10c-1-verified`.
+
+**Nächster Ansatz für Phase 2:**
+1. Debug-Print `[IRQ33] hit` in den kbd-Handler → kommt der IRQ überhaupt?
+2. `[IOAPIC-REDTBL]`-Dump nach `route()` → wie sieht der Redirection-Entry aus?
+3. Wenn IRQ ankommt aber Handler falsch reagiert: `ioapic::eoi()` zusätzlich
+   zu `apic::eoi()` schreiben (QEMU-q35-ISA-IRQs können level-triggered sein).
+4. Wenn IRQ gar nicht ankommt: prüfen ob PIC noch durchlässt, oder ob
+   IO-APIC-Pin-Maskierung (Bit 16 im Redirection-Lo) korrekt ist.
