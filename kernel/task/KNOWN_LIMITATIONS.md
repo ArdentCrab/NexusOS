@@ -1,18 +1,18 @@
+# NEXUS Known Limitations
 
-## B1: err=0x28 GP-Race im iretq-Frame (nicht reproduziert)
-Der Guard in irq_dispatch prueft cs/ss im iretq-Frame. Wenn cs nicht
-0x1b/0x8 ist, panic statt Crash. Ursache: moeglicherweise Race zwischen
-Syscall-Frame und IRQ-Frame bei hlt-Loop-Syscalls (sys_sleep, pipe_read).
+## Aktiv
+- **Syscall-Yield (nr=24) ist no-op** — Scheduler wechselt erst beim nächsten
+  Timer-Tick. Fix: A8b (echter Suspend-Frame, kein sysretq).
+- **Syscall-Exit blockiert ~10ms** — hlt-Loop bis Timer-IRQ. Fix: A8b.
+- **Shell-Echo-Glitch** bei Async-Ausgabe (kosmetisch, nicht funktional).
 
-**Nicht reproduziert** mit:
-- bench 100 x 5 + sleep 2000 (500 Tasks, ~2.5s Scheduler)
-- piper, piper-async, pipe-test
-- write2 x 20 parallel
+## Behoben
+- ~~**B1: `[SCHED] CORRUPT cs` bei Ring-3-Tasks**~~ — behoben 2025-10-22.
+  Ursache war `sysretq` mit strukturell inkompatiblem GDT-Layout.
+  Fix: `syscall_entry` nutzt jetzt `iretq` mit explizitem Frame (CS=0x1b, SS=0x23).
+  Siehe `docs/state.md` und Commit `5b6141a`.
 
-Der Race ist selten oder existiert nicht mehr. Guard bleibt als Fail-Safe.
-
-**Falls reproduzierbar:** [SCHED] CORRUPT-Message zeigt cs/ss-Werte und
-fr[15..21]. Dann ist entweder Syscall-Frame oder IRQ-Frame im next->rsp.
-Fix waere: started=0 setzen in syscall_entry bei blocking syscalls.
-
-Bei SMP wird der Race wahrscheinlicher — dann erneut testen.
+## Der Guard in `irq_dispatch`
+Prüft `cs`/`ss` im iretq-Frame. Erwartet `cs ∈ {0x1b, 0x8}` und bei
+`cs == 0x1b` zusätzlich `ss ∈ {0x23, 0x13}` (letzteres nach iretq-Fix
+nicht mehr auftretend, aber defensiv erlaubt).
