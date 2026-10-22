@@ -250,6 +250,8 @@ extern "C" u64 task_syscall_suspend(u64 frame_rsp) {
         return frame_rsp;
     }
     prev->rsp = frame_rsp;
+    // A8b Session 3: prev ist jetzt ein iretq-faehiger Frame-Task.
+    prev->started = 1;
     if (prev->dead) {
         task::mark_dead(prev);
     } else {
@@ -257,12 +259,12 @@ extern "C" u64 task_syscall_suspend(u64 frame_rsp) {
         task::mark_ready(prev);
     }
     task::TCB* next = task::pick_next_ready();
-    // Session 2: wenn prev dead, darf er NICHT resumed werden → idle
-    if (prev->dead && (!next || next == prev || !next->started)) {
+    // Safety net: prev dead + kein Kandidat → idle
+    if (prev->dead && (!next || next == prev)) {
         next = task::idle;
     }
-    // Session 1: nur iretq-faehige Tasks (started=1) annehmen
-    if (!next || next == prev || !next->started) {
+    // Nichts zu wechseln
+    if (!next || next == prev) {
         task::mark_running(prev);
         task::current = prev;
         g_irq_next_mode = 1;
@@ -280,7 +282,10 @@ extern "C" u64 task_syscall_suspend(u64 frame_rsp) {
     if (want != hal::read_cr3()) {
         __asm__ volatile("movq %0, %%cr3" :: "r"(want) : "memory");
     }
-    g_irq_next_mode = 1;   // Session 1: immer iretq-Modus
+    // A8b Session 3: spawn-frame Tasks brauchen den ret-Pfad (mode=0),
+    // bereits-gestartete Tasks den iretq-Pfad (mode=1).
+    g_irq_next_mode = next->started ? 1u : 0u;
+    next->started = 1;
     return next->rsp;
 }
 
@@ -346,6 +351,9 @@ __asm__(
     "  movq %rsp, %rdi\n"
     "  call task_syscall_suspend\n"   // rax = next->rsp
     "  movq %rax, %rsp\n"
+    // A8b Session 3: mode-Check (0=ret-path spawn-frame, 1=iretq)
+    "  cmpl $0, g_irq_next_mode(%rip)\n"
+    "  jz 3f\n"
     // resume: 15 GPRs poppen + skip 16 (dummies) + iretq
     "  popq %r15\n"
     "  popq %r14\n"
@@ -368,5 +376,9 @@ __asm__(
     "  swapgs\n"
     "2:\n"
     "  iretq\n"
+    // A8b Session 3: ret-Path fuer spawn-frame Tasks
+    "3:\n"
+    "  popq %r15\n  popq %r14\n  popq %r13\n  popq %r12\n"
+    "  popq %rbp\n  popq %rbx\n  ret\n"
 );
 

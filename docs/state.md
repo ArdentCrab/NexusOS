@@ -123,3 +123,21 @@ gespawnter Task (Ret-Path) sofort `sys_yield`/`sys_exit` macht, bevor er
 einmal gelaufen ist, könnte der Ret-Stack als iretq-Frame missinterpretiert
 werden. In der Praxis selten (erster Syscall ist meistens sys_write), aber
 sollte sauber abgedeckt werden.
+
+## A8b-3 (2025-10-22) — Suspend-Pfad unterstützt spawn-frame Tasks
+**Fix:** `task_syscall_suspend` setzt jetzt:
+- `prev->started = 1` (prev ist ab jetzt iretq-fähig)
+- `g_irq_next_mode = next->started ? 1 : 0` (ret-path vs iretq)
+- `next->started = 1` (nach Rückkehr ist next gestartet)
+
+Der Suspend-asm-Stub prüft `g_irq_next_mode` und springt bei 0 in den
+ret-Path (`pop r15/r14/r13/r12/rbp/rbx; ret`), sonst iretq.
+
+**Verifiziert:** `bench 10`, `bench 100`, `bench 10` hintereinander.
+Alle Tasks EXIT/REAP, kein Crash. 96-Page-Sockel nach bench 100
+(vorbestehend, nicht kumulativ, nicht Session-3-verursacht).
+
+**Status A8:** komplett.
+- sys_yield: suspendiert sofort
+- sys_exit: suspendiert sofort  
+- spawn-frame Tasks: korrekt (ret-path)
