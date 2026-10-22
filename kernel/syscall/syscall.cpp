@@ -240,6 +240,28 @@ extern "C" u64 syscall_dispatch(u64* regs) {
         for (int i = 0; i < 6; i++) ((u8*)a0)[i] = f->mac[i];
         return 0;
     }
+        if (nr == 202) {  // udp_open(local_port) -> idx
+        return (u64)(i64)net::udp_open((u16)a0);
+    }
+    if (nr == 203) {  // udp_send(idx, dst_ip_be, dst_port, data_ptr, len)
+        if (!vmm::user_range_ok(regs[1], (u32)regs[0], false))
+            return (u64)(i64)-14;
+        u8 dst[4];
+        dst[0] = (u8)((a1 >> 24) & 0xFF);
+        dst[1] = (u8)((a1 >> 16) & 0xFF);
+        dst[2] = (u8)((a1 >>  8) & 0xFF);
+        dst[3] = (u8)((a1      ) & 0xFF);
+        return (u64)(i64)net::udp_send(5001, dst, (u16)a2,
+                                       (const u8*)regs[1], (u32)regs[0]);
+    }
+    if (nr == 204) {  // udp_recv(idx, buf, cap, timeout_ms) -> n
+        if (!vmm::user_range_ok(a1, a2, true)) return (u64)(i64)-14;
+        return (u64)(i64)net::udp_recv((u32)a0, (u8*)a1, (u32)a2,
+                                       nullptr, nullptr, (u32)regs[2]);
+    }
+    if (nr == 205) {  // udp_close(idx)
+        return (u64)(i64)net::udp_close((u32)a0);
+    }
     return (u64)E_NOSYS;
 }
 

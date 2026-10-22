@@ -33,7 +33,7 @@ run: nexus.elf
 	        -efi-boot-part --efi-boot-image --protective-msdos-label \
 	        iso_root -o nexus.iso 2>&1 | tail -3
 	./limine/limine bios-install nexus.iso 2>&1 | tail -2
-	qemu-system-x86_64 -M q35 -drive if=none,id=d0,file=disk.img,format=raw -device virtio-blk-pci,drive=d0,disable-modern=on -netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-modern=on -cdrom nexus.iso -serial stdio -cpu max -m 512M -no-reboot
+	qemu-system-x86_64 -M q35 -drive if=none,id=d0,file=disk.img,format=raw -device virtio-blk-pci,drive=d0,disable-modern=on -netdev user,id=n0,hostfwd=udp::5000-10.0.2.15:5000 -device virtio-net-pci,netdev=n0,disable-modern=on -cdrom nexus.iso -serial stdio -cpu max -m 512M -no-reboot
 
 runkvm: nexus.elf
 	rm -rf iso_root nexus.iso

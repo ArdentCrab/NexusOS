@@ -1582,6 +1582,57 @@ static void cmd_r3ping(int ac, char** av) {
             (u32)t->pid, ip[0], ip[1], ip[2], ip[3]);
 }
 
+static bool _parse_ip4(const char* str, u8 out[4]) {
+    int dots = 0, cur = 0;
+    for (const char* p = str; *p && dots < 4; p++) {
+        if (*p == '.') { out[dots++] = (u8)cur; cur = 0; }
+        else if (*p >= '0' && *p <= '9') cur = cur * 10 + (*p - '0');
+        else return false;
+    }
+    if (dots == 3) { out[3] = (u8)cur; return true; }
+    return false;
+}
+
+static void cmd_udpsend(int ac, char** av) {
+    if (ac < 4) { hal::ps("usage: udpsend <ip> <port> <text>\n"); return; }
+    u8 ip[4];
+    if (!_parse_ip4(av[1], ip)) { hal::ps("bad ip\n"); return; }
+    u32 port = 0;
+    for (const char* p = av[2]; *p >= '0' && *p <= '9'; p++) port = port * 10 + (u32)(*p - '0');
+    if (port == 0 || port > 65535) { hal::ps("bad port\n"); return; }
+    u32 tlen = 0;
+    while (av[3][tlen]) tlen++;
+    net::udp_send(5001, ip, (u16)port, (const u8*)av[3], tlen);
+}
+
+static void cmd_udprecv(int ac, char** av) {
+    if (ac < 2) { hal::ps("usage: udprecv <port> [timeout_ms]\n"); return; }
+    u32 port = 0;
+    for (const char* p = av[1]; *p >= '0' && *p <= '9'; p++) port = port * 10 + (u32)(*p - '0');
+    if (port == 0 || port > 65535) { hal::ps("bad port\n"); return; }
+    u32 to = 3000;
+    if (ac >= 3) {
+        u32 v = 0;
+        for (const char* p = av[2]; *p >= '0' && *p <= '9'; p++) v = v * 10 + (u32)(*p - '0');
+        if (v > 0 && v <= 30000) to = v;
+    }
+    int idx = net::udp_open((u16)port);
+    if (idx < 0) { hal::ps("no free udp slot\n"); return; }
+    hal::pf("[UDP] listening on port %u (timeout %u ms)\n", port, to);
+    u8 buf[512];
+    u8 src_ip[4]; u16 src_port = 0;
+    int n = net::udp_recv((u32)idx, buf, sizeof(buf), src_ip, &src_port, to);
+    net::udp_close((u32)idx);
+    if (n < 0) {
+        hal::ps("no UDP packet received\n");
+        return;
+    }
+    hal::pf("[UDP] rx %d bytes from %u.%u.%u.%u:%u: '",
+            n, src_ip[0], src_ip[1], src_ip[2], src_ip[3], (u32)src_port);
+    for (int i = 0; i < n; i++) hal::pc((char)buf[i]);
+    hal::ps("'\n");
+}
+
 static void cmd_ping(int ac, char** av) {
     if (ac < 2) { hal::ps("usage: ping <ip> [count]\n"); return; }
     u32 count = 3;
@@ -1653,6 +1704,8 @@ static void dispatch() {
     if (streq(c, "arp"))                       { cmd_arp(argc, argv); return; }
     if (streq(c, "ping"))                      { cmd_ping(argc, argv); return; }
     if (streq(c, "r3ping"))                     { cmd_r3ping(argc, argv); return; }
+    if (streq(c, "udpsend"))                    { cmd_udpsend(argc, argv); return; }
+    if (streq(c, "udprecv"))                    { cmd_udprecv(argc, argv); return; }
     if (streq(c, "blk"))                       { cmd_blk(argc, argv); return; }
     if (streq(c, "sync"))                      { cmd_sync(); return; }
     if (streq(c, "wal"))                       { cmd_wal(); return; }

@@ -2,6 +2,8 @@
 #include "kernel/dev/net.h"
 #include "kernel/dev/virtio_net.h"
 
+extern volatile u64 g_tick;
+
 namespace net {
 
 Iface g_ifaces[4];
@@ -10,6 +12,11 @@ u32   g_iface_count = 0;
 static u64 stat_rx_ip_pkts = 0;
 static u64 stat_tx_ip_pkts = 0;
 static u16 ip_id_seq = 0;
+
+
+
+static UdpSocket g_udp[8];
+
 static u16 icmp_id  = 0x4E58;   // 'NX'
 
 static void memcpy_n(u8* dst, const u8* src, u32 n) { for (u32 i = 0; i < n; i++) dst[i] = src[i]; }
@@ -204,6 +211,108 @@ void init() {
             f->ip[0], f->ip[1], f->ip[2], f->ip[3],
             f->mask[0], f->mask[1], f->mask[2], f->mask[3],
             f->gw[0], f->gw[1], f->gw[2], f->gw[3]);
+}
+
+
+// ── UDP-Socket-Layer ────────────────────────────────────────────
+
+int udp_open(u16 local_port) {
+    for (u32 i = 0; i < 8; i++) {
+        if (!g_udp[i].used) {
+            g_udp[i].used = true;
+            g_udp[i].local_port = local_port;
+            g_udp[i].rx_head = 0;
+            g_udp[i].rx_tail = 0;
+            hal::pf("[NET ] udp_open idx=%u port=%u\n", i, (u32)local_port);
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+int udp_close(u32 idx) {
+    if (idx >= 8) return -1;
+    g_udp[idx].used = false;
+    return 0;
+}
+
+int udp_send(u16 src_port, const u8 dst_ip[4], u16 dst_port,
+             const u8* data, u32 len) {
+    if (len > 1472) return -1;
+    u8 buf[1500];
+    buf[0] = (u8)(src_port >> 8); buf[1] = (u8)(src_port & 0xFF);
+    buf[2] = (u8)(dst_port >> 8); buf[3] = (u8)(dst_port & 0xFF);
+    u16 ulen = (u16)(8 + len);
+    buf[4] = (u8)(ulen >> 8); buf[5] = (u8)(ulen & 0xFF);
+    buf[6] = 0; buf[7] = 0;   // checksum 0 = legal für IPv4
+    for (u32 i = 0; i < len; i++) buf[8 + i] = data[i];
+    int r = ip_send(dst_ip, 17, buf, ulen);
+    if (r == 0) {
+        hal::pf("[NET ] UDP TX -> %u.%u.%u.%u:%u (%u bytes, src=%u)\n",
+                dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3],
+                (u32)dst_port, len, (u32)src_port);
+    } else {
+        hal::pf("[NET ] UDP TX fail (err %d)\n", r);
+    }
+    return r;
+}
+
+void udp_drain() {
+    u8 frame[1500];
+    for (int iter = 0; iter < 8; iter++) {
+        int n = virtio_net::net_poll(frame, sizeof(frame));
+        if (n <= 0) break;
+        if (n < 14 + 20 + 8) continue;
+        if (frame[12] != 0x08 || frame[13] != 0x00) continue;
+        u8* ip = frame + 14;
+        u32 ihl = (u32)(ip[0] & 0x0F) * 4;
+        if (ip[9] != 17) continue;
+        if (n < (int)(14 + ihl + 8)) continue;
+        u8* udp = ip + ihl;
+        u16 src_port = ((u16)udp[0] << 8) | udp[1];
+        u16 dst_port = ((u16)udp[2] << 8) | udp[3];
+        u32 paylen = n - 14 - ihl - 8;
+        if (paylen > 256) paylen = 256;
+        for (u32 i = 0; i < 8; i++) {
+            if (!g_udp[i].used) continue;
+            if (g_udp[i].local_port != dst_port) continue;
+            u32 slot = g_udp[i].rx_head % 4;
+            u32 nxt = (g_udp[i].rx_head + 1) % 4;
+            if (nxt == g_udp[i].rx_tail) break;   // queue voll
+            for (u32 k = 0; k < paylen; k++) g_udp[i].rx_buf[slot][k] = udp[8 + k];
+            g_udp[i].rx_len[slot] = (u16)paylen;
+            memcpy_n(g_udp[i].rx_src_ip[slot], ip + 12, 4);
+            g_udp[i].rx_src_port[slot] = src_port;
+            g_udp[i].rx_head = nxt;
+            break;
+        }
+    }
+}
+
+int udp_recv(u32 idx, u8* out_buf, u32 cap,
+             u8* out_src_ip, u16* out_src_port, u32 timeout_ms) {
+    if (idx >= 8 || !g_udp[idx].used) return -1;
+    if (timeout_ms > 60000) timeout_ms = 60000;
+    u64 deadline = g_tick + (timeout_ms / 10) + 1;
+    for (;;) {
+        udp_drain();
+        UdpSocket* s = &g_udp[idx];
+        if (s->rx_head != s->rx_tail) {
+            u32 slot = s->rx_tail % 4;
+            u32 n = s->rx_len[slot];
+            if (n > cap) n = cap;
+            for (u32 k = 0; k < n; k++) out_buf[k] = s->rx_buf[slot][k];
+            if (out_src_ip) memcpy_n(out_src_ip, s->rx_src_ip[slot], 4);
+            if (out_src_port) *out_src_port = s->rx_src_port[slot];
+            s->rx_tail = (s->rx_tail + 1) % 4;
+            return (int)n;
+        }
+        if (g_tick >= deadline) {
+            hal::pf("[NET ] udp_recv timeout after %u ms\n", timeout_ms);
+            return -2;
+        }
+        __asm__ volatile("sti; hlt");
+    }
 }
 
 }  // namespace net
