@@ -3,7 +3,7 @@
 ## Aktiv
 - **Syscall-Yield (nr=24) ist no-op** — Scheduler wechselt erst beim nächsten
   Timer-Tick. Fix: A8b (echter Suspend-Frame, kein sysretq).
-- **Syscall-Exit blockiert ~10ms** — hlt-Loop bis Timer-IRQ. Fix: A8b.
+- ~~**Syscall-Exit blockiert ~10ms**~~ — behoben 2025-10-22 (A8b-2).
 - **Shell-Echo-Glitch** bei Async-Ausgabe (kosmetisch, nicht funktional).
 
 ## Behoben

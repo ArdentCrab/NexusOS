@@ -105,3 +105,21 @@ aufgesetzt werden.
 **Wenn PS/2-IRQ doch mal gebraucht wird:** QEMU im GTK-Fenster nutzen
 (statt `-serial stdio`), dann kommen echte PS/2-IRQs über Vector 33.
 Für den aktuellen Terminal-Workflow irrelevant.
+
+## A8b-2 (2025-10-22) — sys_exit sofort reapen
+**Fix:** `sys_exit` setzt `t->dead = 1` und triggert `g_syscall_suspend`.
+`task_syscall_suspend` erkennt `prev->dead`, markiert dead und wählt next.
+Fallback auf `task::idle`, falls kein anderer Task ready ist.
+
+**Verifiziert:** `bench 100` + `bench 10` ohne Crash, alle EXIT/REAP.
+`sys_yield` und `sys_exit` wechseln sofort, kein hlt-Wait mehr.
+
+**Nebenbefund:** ~100 Pages einmaliger Leak bei `bench 100` (Baseline 2132 → 2232).
+Nicht kumulativ (zweiter bench-Aufruf ändert nicht weiter). Verdacht: bench-Setup
+selbst. Wird in eigener Session untersucht (A8b-4+).
+
+**Offen (Session 3):** `started=0`-Tasks im Suspend-Pfad. Wenn ein gerade
+gespawnter Task (Ret-Path) sofort `sys_yield`/`sys_exit` macht, bevor er
+einmal gelaufen ist, könnte der Ret-Stack als iretq-Frame missinterpretiert
+werden. In der Praxis selten (erster Syscall ist meistens sys_write), aber
+sollte sauber abgedeckt werden.

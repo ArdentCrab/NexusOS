@@ -208,17 +208,11 @@ extern "C" u64 syscall_dispatch(u64* regs) {
         task::TCB* t = task::current;
         if (t) {
             hal::pf("[EXIT] pid=%u code=%u\n", (u32)t->pid, (u32)a0);
-            t->dead = 1; task::mark_dead(t);
+            t->dead = 1;
         }
-        // KNOWN LIMITATION (S2): blockiert bis zu 10 ms bis zum naechsten
-        // PIT-Tick. Bei kurzen Kind-Prozessen summiert sich das. Fix waere
-        // ein direkter schedule()-Sprung aus dem Syscall-Exit-Stub heraus.
-        // NICHT per sysretq zum User-Code zurueck: nach sys_exit hat der
-        // User-Code keinen definierten Nachfolger (Compiler emittiert
-        // hinter __builtin_unreachable() nichts). Stattdessen im Kernel
-        // warten, bis der naechste Timer-IRQ den Scheduler triggert.
-        __asm__ volatile("sti");
-        for (;;) __asm__ volatile("hlt");
+        // A8b Session 2: sofort in Scheduler, kein hlt-Wait.
+        g_syscall_suspend = 1;
+        return (u64)a0;
     }
     return (u64)E_NOSYS;
 }
@@ -263,6 +257,10 @@ extern "C" u64 task_syscall_suspend(u64 frame_rsp) {
         task::mark_ready(prev);
     }
     task::TCB* next = task::pick_next_ready();
+    // Session 2: wenn prev dead, darf er NICHT resumed werden → idle
+    if (prev->dead && (!next || next == prev || !next->started)) {
+        next = task::idle;
+    }
     // Session 1: nur iretq-faehige Tasks (started=1) annehmen
     if (!next || next == prev || !next->started) {
         task::mark_running(prev);
