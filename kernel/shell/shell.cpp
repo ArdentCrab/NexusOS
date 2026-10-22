@@ -1505,6 +1505,83 @@ static void cmd_netinfo() {
     }
 }
 
+// A11.3b: Ring-3-Programm, das sys_net_ping (nr=200) aufruft.
+// Bytes: mov rax,200; mov rdi,ip_be; mov rsi,3; mov rdx,500;
+//        syscall; mov rdi,rax; mov rax,60; syscall
+// Ergebnis: exit-Code = Anzahl erfolgreicher Pings (0..3).
+static void emit_r3ping_program(u8* code, u32 ip_be) {
+    for (int i = 0; i < 256; i++) code[i] = 0;
+    u32 p = 0;
+    // mov rax, 200  (48 B8 imm64)
+    code[p++] = 0x48; code[p++] = 0xB8;
+    u64 v = 200; for (int i = 0; i < 8; i++) code[p++] = (u8)(v >> (8*i));
+    // mov rdi, ip_be  (48 BF imm64)
+    code[p++] = 0x48; code[p++] = 0xBF;
+    v = ip_be; for (int i = 0; i < 8; i++) code[p++] = (u8)(v >> (8*i));
+    // mov rsi, 3  (48 BE imm64)
+    code[p++] = 0x48; code[p++] = 0xBE;
+    v = 3; for (int i = 0; i < 8; i++) code[p++] = (u8)(v >> (8*i));
+    // mov rdx, 500  (48 BA imm64)
+    code[p++] = 0x48; code[p++] = 0xBA;
+    v = 500; for (int i = 0; i < 8; i++) code[p++] = (u8)(v >> (8*i));
+    // syscall (0F 05)
+    code[p++] = 0x0F; code[p++] = 0x05;
+    // mov rdi, rax  (48 89 C7)
+    code[p++] = 0x48; code[p++] = 0x89; code[p++] = 0xC7;
+    // mov rax, 60  (48 B8 imm64)
+    code[p++] = 0x48; code[p++] = 0xB8;
+    v = 60; for (int i = 0; i < 8; i++) code[p++] = (u8)(v >> (8*i));
+    // syscall
+    code[p++] = 0x0F; code[p++] = 0x05;
+    // (unreachable) hlt
+    code[p++] = 0xF4;
+}
+
+static void cmd_r3ping(int ac, char** av) {
+    if (ac < 2) { hal::ps("usage: r3ping <ip>\n"); return; }
+    u8 ip[4] = {0,0,0,0};
+    int dots = 0, cur = 0;
+    for (const char* p = av[1]; *p && dots < 4; p++) {
+        if (*p == '.') { ip[dots++] = (u8)cur; cur = 0; }
+        else if (*p >= '0' && *p <= '9') cur = cur * 10 + (*p - '0');
+        else break;
+    }
+    if (dots == 3) ip[3] = (u8)cur;
+    else { hal::ps("bad ip\n"); return; }
+
+    u32 ip_be = ((u32)ip[0] << 24) | ((u32)ip[1] << 16) |
+                ((u32)ip[2] <<  8) |  (u32)ip[3];
+
+    // Physikalische Pages fuer Code + Stack
+    u64 code_phys  = mem::pmm::alloc();
+    u64 stack_phys = mem::pmm::alloc();
+    if (!code_phys || !stack_phys) { hal::ps("pmm fail\n"); return; }
+
+    u8* code = (u8*)mem::p2v(code_phys);
+    emit_r3ping_program(code, ip_be);
+
+    u8* stk = (u8*)mem::p2v(stack_phys);
+    for (int i = 0; i < 4096; i++) stk[i] = 0;
+
+    u64 my_pml4 = vmm::alloc_pml4();
+    if (!my_pml4) { hal::ps("alloc_pml4 fail\n"); return; }
+
+    u64 code_va  = 0x0000000040000000ULL;
+    u64 stack_va = 0x0000000050000000ULL;
+    if (!vmm::map_user_page_in(my_pml4, code_va,  code_phys,  1)) {
+        hal::ps("map code fail\n"); return;
+    }
+    if (!vmm::map_user_page_in(my_pml4, stack_va, stack_phys, 1)) {
+        hal::ps("map stack fail\n"); return;
+    }
+
+    task::TCB* t = task::spawn_full("r3ping", user_elf_fn, nullptr,
+                                    my_pml4, code_va, stack_va + 0x3ff0);
+    if (!t) { hal::ps("spawn fail\n"); return; }
+    hal::pf("[R3PING] spawned pid=%u dst=%u.%u.%u.%u (nr=200)\n",
+            (u32)t->pid, ip[0], ip[1], ip[2], ip[3]);
+}
+
 static void cmd_ping(int ac, char** av) {
     if (ac < 2) { hal::ps("usage: ping <ip> [count]\n"); return; }
     u32 count = 3;
@@ -1575,6 +1652,7 @@ static void dispatch() {
     if (streq(c, "netinfo"))                   { cmd_netinfo(); return; }
     if (streq(c, "arp"))                       { cmd_arp(argc, argv); return; }
     if (streq(c, "ping"))                      { cmd_ping(argc, argv); return; }
+    if (streq(c, "r3ping"))                     { cmd_r3ping(argc, argv); return; }
     if (streq(c, "blk"))                       { cmd_blk(argc, argv); return; }
     if (streq(c, "sync"))                      { cmd_sync(); return; }
     if (streq(c, "wal"))                       { cmd_wal(); return; }
