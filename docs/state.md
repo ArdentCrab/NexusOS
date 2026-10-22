@@ -84,3 +84,24 @@ Build neu, Keyboard wieder da, alle Tests grün. Siehe Tag `v0.9-a10c-1-verified
    zu `apic::eoi()` schreiben (QEMU-q35-ISA-IRQs können level-triggered sein).
 4. Wenn IRQ gar nicht ankommt: prüfen ob PIC noch durchlässt, oder ob
    IO-APIC-Pin-Maskierung (Bit 16 im Redirection-Lo) korrekt ist.
+
+## A10c-2 Diagnose (2025-10-22) — Keyboard-IRQ irrelevant
+**Befund:** Vector 33 feuert nie, `[IRQ33]`-Counter bleibt 0. Trotzdem
+funktioniert Keyboard (Shell-Input). Grund:
+
+QEMU-Aufruf ist `-serial stdio` → User-Input landet auf COM1 (0x3F8),
+nicht auf emulierter PS/2-Tastatur. Shell pollt COM1 in
+`kbd::getchar_nb()` (shell.cpp:1128, 1561). PS/2-IRQ-Pfad
+(`kbd::irq_handler` via Vector 33) ist **toter Code** im aktuellen Setup.
+
+**Konsequenz:** IO-APIC-Routing für Keyboard ist nicht nötig.
+`ioapic::route(1, 33, 0)` wird nicht gebaut — IO-APIC bleibt bereit für
+echte IRQ-Geräte (virtio-blk-IRQ, Netzwerk, später SMP).
+
+**Redirection-Table nach Reset:** alle Pins maskiert, vec=0, dest=0.
+Das ist der saubere Default — IO-APIC-Routing kann später zustandsfrei
+aufgesetzt werden.
+
+**Wenn PS/2-IRQ doch mal gebraucht wird:** QEMU im GTK-Fenster nutzen
+(statt `-serial stdio`), dann kommen echte PS/2-IRQs über Vector 33.
+Für den aktuellen Terminal-Workflow irrelevant.

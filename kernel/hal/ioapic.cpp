@@ -84,4 +84,26 @@ void eoi() {
     if (g_ioapic) wr(REG_EOI, 0);
 }
 
+
+// A10c-2 Diagnose: liest die Redirection-Table und loggt sie.
+// Zeigt mask/trigger/polarity/dest pro GSI. Wird nach route() aufgerufen,
+// um zu verifizieren, dass der Eintrag korrekt geschrieben wurde.
+void dump_redtbl(u8 gsi_start, u8 gsi_end) {
+    if (!g_ioapic) { hal::ps("[IOAPIC-REDTBL] no ioapic\n"); return; }
+    if (gsi_end >= g_pin_count) gsi_end = g_pin_count - 1;
+    hal::pf("[IOAPIC-REDTBL] gsi %u..%u\n", gsi_start, gsi_end);
+    for (u8 g = gsi_start; g <= gsi_end; g++) {
+        u32 reg = REG_TBL + g * 2;
+        u32 lo  = rd(reg);
+        u32 hi  = rd(reg + 1);
+        u32 vec      = lo & 0xFF;
+        u32 masked   = (lo >> 16) & 1;
+        u32 trigger  = (lo >> 15) & 1;
+        u32 polarity = (lo >> 13) & 1;
+        u32 dest     = (hi >> 24) & 0xFF;
+        hal::pf("  gsi=%-2u lo=%08x hi=%08x vec=%-2u mask=%u trig=%u pol=%u dest=%u\n",
+                g, lo, hi, vec, masked, trigger, polarity, dest);
+    }
+}
+
 } // namespace ioapic

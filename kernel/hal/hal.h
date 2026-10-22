@@ -107,6 +107,7 @@ u64 period();
 
 namespace ioapic {
 bool is_present();
+void dump_redtbl(u8 gsi_start, u8 gsi_end);
 u32  pin_count();
 void init();
 void route(u8 gsi, u8 vector, u8 dest_apic_id);
