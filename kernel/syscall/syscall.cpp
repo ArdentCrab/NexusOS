@@ -6,6 +6,13 @@
 #include "kernel/task/task.h"
 #include "kernel/task/fd.h"
 #include "kernel/mm/mm.h"
+#include "kernel/hal/hal.h"
+
+// A8b: externe Symbole aus nexus.cpp + eigenes Flag (extern "C" für asm)
+extern "C" volatile u32 g_irq_next_mode;
+extern u64 g_boot_pml4;
+extern "C" void gdt_tss_set_rsp0_export(u64 ktop);
+extern "C" { volatile u32 g_syscall_suspend = 0; }
 
 namespace syscall_msr {
 static constexpr u32 MSR_EFER   = 0xC0000080;
@@ -193,10 +200,8 @@ extern "C" u64 syscall_dispatch(u64* regs) {
         return (u64)sys_close(a0);
     }
     if (nr == 24) {  // yield()  (sched_yield)
-        // KNOWN LIMITATION (T4): yield ist derzeit no-op. Der Scheduler
-        // wechselt erst beim naechsten PIT-Tick (bis zu 10 ms). Ein echtes
-        // yield erfordert einen separaten Syscall-Exit-Pfad, der direkt
-        // in den Scheduler springt (kein sysretq).
+        // A8b: suspendiert den aktuellen Task, Scheduler wechselt sofort.
+        g_syscall_suspend = 1;
         return 0;
     }
     if (nr == 60) {  // exit(code)
@@ -240,6 +245,47 @@ extern "C" u64 syscall_dispatch(u64* regs) {
 //
 // rcx/r11 werden vor dem iretq aus dem Frame restauriert — User-Code
 // sieht wie bisher seinen eigenen RIP in rcx und RFLAGS in r11.
+// A8b Session 1: syscall-suspend.
+// sys_yield setzt g_syscall_suspend. syscall_entry prueft nach dispatch,
+// ob gewechselt werden soll. Wenn ja, pusht es 15 GPRs + 2 dummies
+// (IRQ-kompatibler Frame), ruft task_syscall_suspend, springt zu next.
+extern "C" u64 task_syscall_suspend(u64 frame_rsp) {
+    task::TCB* prev = task::current;
+    if (!prev) {
+        g_irq_next_mode = 1;
+        return frame_rsp;
+    }
+    prev->rsp = frame_rsp;
+    if (prev->dead) {
+        task::mark_dead(prev);
+    } else {
+        prev->vruntime += (20 - prev->priority) * 3;
+        task::mark_ready(prev);
+    }
+    task::TCB* next = task::pick_next_ready();
+    // Session 1: nur iretq-faehige Tasks (started=1) annehmen
+    if (!next || next == prev || !next->started) {
+        task::mark_running(prev);
+        task::current = prev;
+        g_irq_next_mode = 1;
+        return prev->rsp;
+    }
+    task::mark_running(next);
+    task::current = next;
+    if (next->kstack_phys) {
+        u64 ktop = (u64)mem::p2v(next->kstack_phys)
+                 + next->kstack_pages * mem::pmm::PS;
+        gdt_tss_set_rsp0_export(ktop);
+        g_cpu.kernel_rsp = ktop;
+    }
+    u64 want = next->pml4_phys ? next->pml4_phys : g_boot_pml4;
+    if (want != hal::read_cr3()) {
+        __asm__ volatile("movq %0, %%cr3" :: "r"(want) : "memory");
+    }
+    g_irq_next_mode = 1;   // Session 1: immer iretq-Modus
+    return next->rsp;
+}
+
 __asm__(
     ".global syscall_entry\n"
     "syscall_entry:\n"
@@ -270,9 +316,59 @@ __asm__(
     "  popq %rdi\n"
     "  addq $8, %rsp\n"                // discard saved nr (%rax = ret-value)
     // --- rcx/r11 aus Frame restaurieren (User-Kompatibilitaet) ---
-    "  movq 0(%rsp), %rcx\n"           // rcx = user RIP
-    "  movq 16(%rsp), %r11\n"          // r11 = user RFLAGS
+    // A8b Session 1: suspend-check
+    "  cmpl $0, g_syscall_suspend(%rip)\n"
+    "  jne 1f\n"
+    // normal return (mode=iretq)
+    "  movq 0(%rsp), %rcx\n"
+    "  movq 16(%rsp), %r11\n"
     "  swapgs\n"
+    "  iretq\n"
+    // .sys_suspend: IRQ-kompatibler Frame bauen
+    "1:\n"
+    "  movl $0, g_syscall_suspend(%rip)\n"
+    "  pushq $0\n"                     // dummy vec
+    "  pushq $0\n"                     // dummy err
+    "  pushq %rax\n"                   // return value
+    "  pushq %rbx\n"
+    "  pushq %rcx\n"
+    "  pushq %rdx\n"
+    "  pushq %rsi\n"
+    "  pushq %rdi\n"
+    "  pushq %rbp\n"
+    "  pushq %r8\n"
+    "  pushq %r9\n"
+    "  pushq %r10\n"
+    "  pushq %r11\n"
+    "  pushq %r12\n"
+    "  pushq %r13\n"
+    "  pushq %r14\n"
+    "  pushq %r15\n"
+    "  cli\n"
+    "  movq %rsp, %rdi\n"
+    "  call task_syscall_suspend\n"   // rax = next->rsp
+    "  movq %rax, %rsp\n"
+    // resume: 15 GPRs poppen + skip 16 (dummies) + iretq
+    "  popq %r15\n"
+    "  popq %r14\n"
+    "  popq %r13\n"
+    "  popq %r12\n"
+    "  popq %r11\n"
+    "  popq %r10\n"
+    "  popq %r9\n"
+    "  popq %r8\n"
+    "  popq %rbp\n"
+    "  popq %rdi\n"
+    "  popq %rsi\n"
+    "  popq %rdx\n"
+    "  popq %rcx\n"
+    "  popq %rbx\n"
+    "  popq %rax\n"
+    "  addq $16, %rsp\n"               // skip dummy err + vec
+    "  testb $3, 8(%rsp)\n"
+    "  jz 2f\n"
+    "  swapgs\n"
+    "2:\n"
     "  iretq\n"
 );
 

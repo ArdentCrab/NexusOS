@@ -372,12 +372,17 @@ extern "C" {
 static_assert(offsetof(PerCPU, kernel_rsp) == 48, "PerCPU.kernel_rsp @48");
 static_assert(offsetof(PerCPU, user_rsp)   == 56, "PerCPU.user_rsp @56");
 PerCPU g_cpu;
-static u64 g_boot_pml4 = 0;
+u64 g_boot_pml4 = 0;
 
 // ---------------------------------------------------------------------------
 // IRQ DISPATCH
 // ---------------------------------------------------------------------------
 volatile u64 g_tick = 0;
+
+// A8b: gdt::tss_set_rsp0 fuer syscall.cpp exportieren
+extern "C" void gdt_tss_set_rsp0_export(u64 ktop) {
+    gdt::tss_set_rsp0(ktop);
+}
 
 extern "C" u64 irq_dispatch(Regs* r){
     // Wichtig: jede IRQ entscheidet neu, ob gewechselt wird.
