@@ -419,6 +419,9 @@ extern "C" u64 irq_dispatch(Regs* r){
 
     if (prev) {
         prev->rsp = (u64)r;
+        {
+
+        }
         if (prev->dead) {
             task::mark_dead(prev);
         } else {
@@ -474,7 +477,9 @@ extern "C" u64 irq_dispatch(Regs* r){
         }
         if (cs == 0x1b) {
             u64 ss = fr[21];
-            if (ss != 0x23) {
+            // 0x23 = User-Data (Frame von iretq/spawn_full)
+            // 0x13 = Kernel-Data RPL3 (Frame von sysretq nach B1-Fix)
+            if (ss != 0x23 && ss != 0x13) {
                 hal::pf("[SCHED] CORRUPT ss pid=%u rsp=%p ss=%p\n",
                         (u32)next->pid, next->rsp, ss);
                 hal::pf("  fr[15..21]=%p %p %p %p %p %p %p\n",

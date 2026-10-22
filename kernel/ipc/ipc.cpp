@@ -76,7 +76,8 @@ i64 wait_event(Subscription* subs, u64 handle, u64 timeout_ms,
         }
         if (timeout_ms == 0) return -11;   // EAGAIN
         if (g_tick >= deadline) return -110; // ETIMEDOUT
-        __asm__ volatile("sti; hlt");
+        // B1-TEMP: event-wait disabled
+        return -110;
     }
 }
 

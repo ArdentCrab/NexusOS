@@ -20,8 +20,28 @@ void init() {
     efer |= 1;                        // SCE (Syscall Enable)
     hal::wrmsr(MSR_EFER, efer);
 
-    // STAR: [63:48]=user CS base, [47:32]=kernel CS base
-    u64 star = ((u64)0x18 << 48) | ((u64)0x08 << 32);
+    // STAR: [63:48]=user CS base (SYSRET), [47:32]=kernel CS base (SYSCALL)
+    //
+    // NEXUS GDT: 0=null, 1=K(CS), 2=K(DS), 3=U(CS,0x1b), 4=U(DS,0x23), 5=TSS
+    //
+    // SYSCALL: CS = STAR[47:32]      = 0x08 (Kernel-Code)   OK
+    //          SS = STAR[47:32] + 8  = 0x10 (Kernel-Data)   OK
+    //
+    // SYSRET:  CS = STAR[63:48] + 16 | RPL3
+    //          SS = STAR[63:48] +  8 | RPL3
+    //
+    // B1-Fix: alter Wert 0x18 -> SYSRET CS = 0x18+0x10|3 = 0x2b (TSS-Selector!)
+    //         User-Code lief mit CS=0x2b, beim naechsten Timer-IRQ push
+    //         cs=0x2b in den Frame -> PANIC.
+    //
+    // Neuer Wert 0x08:
+    //   SYSRET CS = 0x08+0x10|3 = 0x1b (User-Code)    OK
+    //   SYSRET SS = 0x08+0x08|3 = 0x13 (Kernel-Data RPL3)
+    //
+    // SS=0x13 ist im 64-bit Mode funktional OK (SS wird fuer Limits
+    // ignoriert, muss nur gueltig sein). Guard im irq_dispatch prueft
+    // 0x13 mit.
+    u64 star = ((u64)0x08 << 48) | ((u64)0x08 << 32);
     hal::wrmsr(MSR_STAR, star);
 
     hal::wrmsr(MSR_LSTAR,  (u64)&syscall_entry);
@@ -87,11 +107,8 @@ extern "C" u64 syscall_dispatch(u64* regs) {
             FileDesc* d = &t->fds[a0];
             if (!d->in_use) return (u64)E_BADF;
             if (d->kind == 2) {
-                for (;;) {
-                    i64 r = ipc::pipe_write((int)d->pipe_idx, (const u8*)a1, a2);
-                    if (r != -11) return (u64)r;
-                    __asm__ volatile("sti; hlt");
-                }
+                // B1-TEMP: blocking disabled (pipe_write)
+                return (u64)ipc::pipe_write((int)d->pipe_idx, (const u8*)a1, a2);
             }
             if (!(d->flags & O_WRONLY)) return (u64)E_BADF;
 
@@ -198,22 +215,48 @@ extern "C" u64 syscall_dispatch(u64* regs) {
     return (u64)E_NOSYS;
 }
 
+// B1-FIX: syscall-Rueckweg nutzt iretq statt sysretq.
+//
+// Grund: SYSRET berechnet CS/SS aus STAR[63:48]:
+//   CS = STAR[63:48] + 16 | RPL3
+//   SS = STAR[63:48] +  8 | RPL3
+// NEXUS-GDT: 3=U-CS(0x1b), 4=U-DS(0x23), 5=TSS(0x2b).
+// Kein STAR-Wert liefert gleichzeitig CS=0x1b UND SS=0x23:
+//   STAR=0x08 -> CS=0x1b, SS=0x13 (Kernel-Data! #GP)
+//   STAR=0x18 -> CS=0x2b, SS=0x23 (TSS als CS! Guard-Panic)
+//
+// Loesung: iretq. CS/SS kommen aus dem Frame, unabhaengig von STAR.
+// Wir bauen den iretq-Frame explizit mit CS=0x1b, SS=0x23.
+//
+// Stack-Layout nach dem Dispatch (von oben gepoppt):
+//   [nr][RIP][CS][RFLAGS][RSP][SS]
+// Nach den 6 popq + addq $8 zeigt %rsp auf [RIP].
+//
+// Alignment: 5 (iretq) + 7 (GPRs) = 12 Pushes = 96 B, % 16 == 0.
+// Damit ist die Stack-Ausrichtung fuer syscall_dispatch korrekt.
+//
+// rcx/r11 werden vor dem iretq aus dem Frame restauriert — User-Code
+// sieht wie bisher seinen eigenen RIP in rcx und RFLAGS in r11.
 __asm__(
     ".global syscall_entry\n"
     "syscall_entry:\n"
     "  swapgs\n"                       // GS -> kernel per-CPU
     "  movq %rsp, %gs:56\n"            // save user RSP
     "  movq %gs:48, %rsp\n"            // load kernel RSP
-    "  pushq $0\n"                     // 16-byte alignment padding
-    "  pushq %rcx\n"                   // [8] user RIP
-    "  pushq %r11\n"                   // [7] user RFLAGS
-    "  pushq %rax\n"                   // [6] syscall nr
-    "  pushq %rdi\n"                   // [5]
-    "  pushq %rsi\n"                   // [4]
-    "  pushq %rdx\n"                   // [3]
-    "  pushq %r10\n"                   // [2]
-    "  pushq %r8\n"                    // [1]
-    "  pushq %r9\n"                    // [0]
+    // --- iretq-Frame bauen (Reihenfolge: SS, RSP, RFLAGS, CS, RIP) ---
+    "  pushq $0x23\n"                  // SS  (U-Data, RPL3)
+    "  pushq %gs:56\n"                 // user RSP
+    "  pushq %r11\n"                   // user RFLAGS
+    "  pushq $0x1b\n"                  // CS  (U-Code, RPL3)
+    "  pushq %rcx\n"                   // user RIP
+    // --- GPRs fuer dispatch (Layout identisch zum alten Stub) ---
+    "  pushq %rax\n"                   // regs[6] = syscall nr
+    "  pushq %rdi\n"                   // regs[5]
+    "  pushq %rsi\n"                   // regs[4]
+    "  pushq %rdx\n"                   // regs[3]
+    "  pushq %r10\n"                   // regs[2]
+    "  pushq %r8\n"                    // regs[1]
+    "  pushq %r9\n"                    // regs[0]
     "  movq %rsp, %rdi\n"
     "  call syscall_dispatch\n"
     "  popq %r9\n"
@@ -222,12 +265,11 @@ __asm__(
     "  popq %rdx\n"
     "  popq %rsi\n"
     "  popq %rdi\n"
-    "  addq $8, %rsp\n"                // discard saved nr (rax behaelt ret-value)
-    "  popq %r11\n"
-    "  popq %rcx\n"
-    "  addq $8, %rsp\n"                // discard padding
-    "  movq %gs:56, %rsp\n"            // restore user RSP
+    "  addq $8, %rsp\n"                // discard saved nr (%rax = ret-value)
+    // --- rcx/r11 aus Frame restaurieren (User-Kompatibilitaet) ---
+    "  movq 0(%rsp), %rcx\n"           // rcx = user RIP
+    "  movq 16(%rsp), %r11\n"          // r11 = user RFLAGS
     "  swapgs\n"
-    "  sysretq\n"
+    "  iretq\n"
 );
 

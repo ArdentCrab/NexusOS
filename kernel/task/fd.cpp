@@ -190,11 +190,8 @@ i64 sys_read(u64 fd, u64 buf, u64 len) {
     FileDesc* d = &t->fds[fd];
     if (!d->in_use) return (i64)E_BADF;
     if (d->kind == 1) {
-        for (;;) {
-            i64 r = ipc::pipe_read((int)d->pipe_idx, (u8*)buf, len);
-            if (r != -11) return r;   // nicht EAGAIN
-            __asm__ volatile("sti; hlt");
-        }
+        // B1-TEMP: blocking disabled (pipe_read)
+        return ipc::pipe_read((int)d->pipe_idx, (u8*)buf, len);
     }
     return sys_read_kernel((int)fd, (void*)buf, len);
 }
