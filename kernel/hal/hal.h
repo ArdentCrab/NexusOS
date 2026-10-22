@@ -104,4 +104,14 @@ void arm(u64);
 u64 period();
 }
 
+
+namespace ioapic {
+bool is_present();
+u32  pin_count();
+void init();
+void route(u8 gsi, u8 vector, u8 dest_apic_id);
+void mask(u8 gsi);
+void unmask(u8 gsi);
+void eoi();
+}
 #endif

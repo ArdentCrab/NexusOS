@@ -939,6 +939,7 @@ extern "C" void kernel_main(){
 
     pic::remap();
     apic::init();
+    ioapic::init();
     apic::arm(100);
     hal::ps("[OK] PIC (kbd) + APIC timer 100 Hz\n");
 
