@@ -17,6 +17,7 @@
 #include "kernel/persist/persist.h"
 #include "kernel/editor/editor.h"
 #include "kernel/trig/trig.h"
+#include "kernel/dev/virtio_net.h"
 
 // Symbole aus nexus.cpp (S11c: nach main/ oder test_helpers/ verschieben)
 extern void user_ring3_fn(void* arg);
@@ -1474,6 +1475,48 @@ static void cmd_pci() {
     hal::pf("  total: %u\n", (u32)pci::count());
 }
 
+static void cmd_netinfo() {
+    if (!virtio_net::is_ready()) {
+        hal::ps("virtio-net not present\n");
+        return;
+    }
+    u8 mac[6];
+    virtio_net::get_mac(mac);
+    hal::ps("virtio-net: ready\n");
+    hal::pf("  MAC:    %x:%x:%x:%x:%x:%x\n",
+            (u32)mac[0], (u32)mac[1], (u32)mac[2],
+            (u32)mac[3], (u32)mac[4], (u32)mac[5]);
+    hal::pf("  queues: rx_qsz=%u tx_qsz=%u\n",
+            virtio_net::rx_qsize(), virtio_net::tx_qsize());
+    u64 rx=0, tx=0, rxb=0, txb=0;
+    virtio_net::stats(&rx, &tx, &rxb, &txb);
+    hal::pf("  RX:     %lu pkts, %lu bytes\n", rx, rxb);
+    hal::pf("  TX:     %lu pkts, %lu bytes\n", tx, txb);
+}
+
+static void cmd_arp(int ac, char** av) {
+    if (ac < 2) { hal::ps("usage: arp <ip>\n"); return; }
+    u8 ip[4] = {0,0,0,0};
+    int dots = 0, cur = 0;
+    for (const char* p = av[1]; *p && dots < 4; p++) {
+        if (*p == '.') { ip[dots++] = (u8)cur; cur = 0; }
+        else if (*p >= '0' && *p <= '9') cur = cur * 10 + (*p - '0');
+        else break;
+    }
+    if (dots == 3) ip[3] = (u8)cur;
+    else { hal::ps("bad ip (expected a.b.c.d)\n"); return; }
+    u8 mac[6] = {0};
+    int r = virtio_net::arp_resolve(ip, mac);
+    if (r == 0) {
+        hal::pf("%u.%u.%u.%u is at %x:%x:%x:%x:%x:%x\n",
+                (u32)ip[0], (u32)ip[1], (u32)ip[2], (u32)ip[3],
+                (u32)mac[0], (u32)mac[1], (u32)mac[2],
+                (u32)mac[3], (u32)mac[4], (u32)mac[5]);
+    } else {
+        hal::pf("no ARP reply (err %d)\n", r);
+    }
+}
+
 static void dispatch() {
     if (argc == 0) return;
     const char* c = argv[0];
@@ -1487,6 +1530,8 @@ static void dispatch() {
     if (streq(c, "mem")  || streq(c, "m"))     { cmd_mem(); return; }
     if (streq(c, "clear")|| streq(c, "cls"))   { cmd_clear(); return; }
     if (streq(c, "pci"))                       { cmd_pci(); return; }
+    if (streq(c, "netinfo"))                   { cmd_netinfo(); return; }
+    if (streq(c, "arp"))                       { cmd_arp(argc, argv); return; }
     if (streq(c, "blk"))                       { cmd_blk(argc, argv); return; }
     if (streq(c, "sync"))                      { cmd_sync(); return; }
     if (streq(c, "wal"))                       { cmd_wal(); return; }
