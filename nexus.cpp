@@ -388,12 +388,7 @@ extern "C" u64 irq_dispatch(Regs* r){
 
     u32 v = (u32)r->vec;
 
-    if (v == 33) {                       // IRQ 1: Keyboard
-        static u32 _irq33_n = 0;
-        _irq33_n++;
-        if ((_irq33_n % 5) == 1) {
-            hal::pf("[IRQ33] hit #%u\n", (u32)_irq33_n);
-        }
+    if (v == 33) {                       // IRQ 1: Keyboard (PS/2)
         kbd::irq_handler();
         pic::eoi(1);
         return (u64)r;
@@ -945,7 +940,6 @@ extern "C" void kernel_main(){
     pic::remap();
     apic::init();
     ioapic::init();
-    ioapic::dump_redtbl(0, 15);   // A10c-2: Diagnose
     apic::arm(100);
     hal::ps("[OK] PIC (kbd) + APIC timer 100 Hz\n");
 
