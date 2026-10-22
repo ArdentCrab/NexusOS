@@ -324,6 +324,7 @@ extern "C" {
 #include "kernel/persist/persist.h"
 #include "kernel/dev/pci.h"
 #include "kernel/dev/virtio_blk.h"
+#include "kernel/dev/virtio_net.h"
 #include "kernel/dev/blockcache.h"
 #include "kernel/dev/kbd.h"
 
@@ -941,6 +942,7 @@ extern "C" void kernel_main(){
 
     pci::init();
     virtio_blk::init();
+    virtio_net::init();
 
     pic::remap();
     apic::init();
