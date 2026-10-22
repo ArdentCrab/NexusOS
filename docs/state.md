@@ -1,39 +1,47 @@
 # NEXUS State
 
-**Version:** v0.9-b1-final (B1 behoben)
-**Datum:** 2025-10-22
+**Version:** v0.9-a11-4b
+**Datum:** 2025-10-23
 
 ## Verifizierter Funktionsumfang
 
 ### Boot & Architektur
 - Limine-Boot, QEMU q35, 512 MB RAM
 - GDT/IDT, TSS mit rsp0, User-Segmente 0x1B/0x23
-- PMM (130086 Pages), Heap (8 MiB), Slab (8 Klassen)
+- PMM (~130k Pages), Heap (8 MiB), Slab (8 Klassen)
 - VMM mit eigenem PML4 pro Ring-3-Task
+- LLRB-Index als globaler Zustandsbaum, WAL + Checkpoints
 
 ### Hardware
 - virtio-blk legacy (PCI, 64 MiB Disk)
+- virtio-net legacy (PCI, MAC 52:54:00:12:34:56, RX/TX-Queues)
 - APIC-Timer 100 Hz (Vector 32)
-- PIC für Keyboard (IRQ1 → Vector 33)
+- IO-APIC erkannt (v0.9-a10c-1), aber nicht aktiv genutzt
+- Keyboard via COM1-Polling (`-serial stdio`), PS/2-IRQ-Pfad ungenutzt
 - Syscall via MSR LSTAR
 
-### Syscall-Pfad (B1-FIX)
-- **Eintritt:** `SYSCALL` — CS = STAR[47:32] = 0x08 (Kernel-Code)
-- **Rückkehr:** `IRETQ` mit explizitem Frame (CS=0x1b, SS=0x23)
+### Syscall-Pfad (B1-FIX, seit v0.9-b1-final)
+- Eintritt: `SYSCALL` — CS = STAR[47:32] = 0x08 (Kernel-Code)
+- Rückkehr: `IRETQ` mit explizitem Frame (CS=0x1b, SS=0x23)
+- Suspend-Pfad (A8b-3): bei `sys_yield`/`sys_exit` baut `syscall_entry`
+  einen IRQ-kompatiblen Frame, ruft `task_syscall_suspend`, springt in
+  Scheduler. Mode-Check (ret-path vs iretq) für spawn-frame Tasks.
 - **Nicht mehr benutzt:** `SYSRETQ` (strukturell unvereinbar mit NEXUS-GDT)
 
 ### Blockierende Syscalls (alle funktional)
 - `sys_sleep(nr=35)`: hlt-Loop, weckt bei g_tick ≥ target
 - `pipe_read` / `pipe_write`: blockierend, EOF / EPIPE
 - `ipc::wait_event`: blockierend mit Timeout
-- `cmd_piper_async`: funktioniert
+- `sys_yield(nr=24)`: suspendiert sofort (kein hlt-Wait)
+- `sys_exit(nr=60)`: suspendiert sofort (kein hlt-Wait)
 
-### Getestet
-- `bench 10` × 3 hintereinander: 0 Panic, 0 Leak, used=2147 stabil
-- `sleep 1000` → echte 1000 ms
-- `piper` → pipe-roundtrip synchron
-- `pipe-test` → Ring-3-Pipe über Syscall, EXIT code=104
-- `sub 0 100` → blockiert echte 100 ms, dann timeout
+### Netzwerk-Stack (A11.1-4)
+- **L2**: virtio-net legacy, RX pre-filled (8 × 2048 B), TX mit virtio-net-Header
+- **ARP**: request + cache (16 Slots), `arp <ip>` Shell-Befehl
+- **IPv4**: Header build/parse, Checksum, `ip_send` mit ARP-Resolution
+- **ICMP**: `ping <ip>` Shell, `sys_net_ping(nr=200)` für Ring-3
+- **UDP**: `net::udp_open/send/recv/close/drain`, Syscalls 202-205
+- **Shell**: `netinfo`, `arp`, `ping`, `r3ping`, `udpsend`, `udprecv`
 
 ### Persistenz
 - WAL (direkt auf Disk, crash-konsistent)
@@ -41,108 +49,65 @@
 - FS-Bitmap-Rebuild
 - LLRB-Index, Auto-Reaping via Sync-Task
 
+### Getestet (2025-10-22/23)
+- `bench 10`, `bench 100`, `bench 10` hintereinander: 0 Panic, 0 Leak
+- `sleep 1000` → echte 1000 ms
+- `piper`, `pipe-test`, `sub 0 100` → alle grün
+- `ping 10.0.2.2` → 3/3 Replies (ICMP-Roundtrip)
+- `r3ping 10.0.2.2` → Ring-3-Syscall, EXIT code=3
+- `udpsend 10.0.2.2 53 hello` → TX-Pfad bestätigt
+
 ## Bekannte Einschränkungen
 
-1. **Syscall-Yield ist no-op** — Scheduler wechselt erst beim nächsten Timer-Tick
-2. **Syscall-Exit blockiert ~10 ms** — hlt-Loop bis Timer-IRQ
-3. **Shell-Echo-Glitch** — bei Async-Ausgabe kollidiert User-Input mit [TASK]-Logs (kosmetisch)
+1. **Shell-Echo-Glitch**: bei Async-Ausgabe ([TASK]-Start-Logs) kollidiert
+   User-Input mit Log-Zeilen. Kosmetisch.
+2. **~100-Page-Sockel nach `bench 100`**: einmalig, nicht kumulativ,
+   Baseline 2147 → 2244, bleibt konstant. Vermutlich bench-Setup-Puffer.
+   Nicht kritisch, aber offen.
+3. **UDP-RX via `hostfwd`**: QEMU-SLIRP-Limitation. UDP-hostfwd braucht
+   aktiven Guest-Flow, sonst wird Host→Guest verworfen. TCP wird das in
+   A11.5 zuverlässig umgehen.
+4. **IO-APIC**: erkannt, MMIO gemappt (`[IOAPIC] id=0 version=20 pins=24`),
+   `route/mask/eoi` vorhanden, aber nicht aktiv. Keyboard braucht's nicht
+   (COM1-Polling). virtio-blk/net pollen. Wird erst für SMP/echte IRQs relevant.
+
+## Letzte Meilensteine (chronologisch)
+
+| Tag | Inhalt |
+|-----|--------|
+| `v0.9-b1-final` | B1-Syscall-Return gefixt (iretq statt sysretq) |
+| `v0.9-a10c-2-clean` | IO-APIC-Probe (Phase 1), Keyboard-IRQ als irrelevant erkannt |
+| `v0.9-a8b-3` | Syscall-Suspend komplett (yield + exit + spawn-frame) |
+| `v0.9-a11-1` | virtio-net Driver (PCI, MAC, Queues) |
+| `v0.9-a11-2` | ARP + TX/RX (erster Netzwerk-Roundtrip) |
+| `v0.9-a11-3a` | IPv4 + ICMP (ping grün) |
+| `v0.9-a11-3b` | Ring-3-Ping (Syscall nr=200) |
+| `v0.9-a11-4b` | UDP + Socket-Layer (Syscalls 202-205) |
 
 ## B1 — Post-Mortem
 
 **Symptom:** `[SCHED] CORRUPT cs pid=N cs=0x2b` bei Ring-3-Tasks unter Last.
 
-**Ursache:** `syscall_entry` benutzte `sysretq`. Das berechnet CS/SS aus
-`STAR[63:48]` (CS=+16|3, SS=+8|3). NEXUS-GDT: User-CS bei 3, User-DS bei 4.
-Kein STAR-Wert macht beides richtig:
+**Ursache:** `syscall_entry` benutzte `sysretq`. Berechnet CS/SS aus
+`STAR[63:48]`: CS=+16|3, SS=+8|3. NEXUS-GDT: User-CS bei Index 3, User-DS
+bei Index 4. Kein STAR-Wert macht beides richtig:
 - STAR=0x18 → CS=0x2b (TSS!), SS=0x23 (korrekt) → Guard-Panic
 - STAR=0x08 → CS=0x1b (korrekt), SS=0x13 (Kernel-Data!) → #GP err=0x10
 
 **Fix:** `syscall_entry` baut expliziten iretq-Frame (CS=0x1b, SS=0x23).
-`SYSRETQ` entfernt. `SYSCALL` (Eintritt) unverändert — STAR[47:32]=0x08 bleibt.
+`SYSRETQ` entfernt. `SYSCALL` (Eintritt) unverändert — STAR[47:32]=0x08.
 
-**Lesson:** Diagnose-Logging am Frame-Save (`[SAVE-BAD]`) war in 5 Minuten
-ergiebiger als 5 Stunden Code-Spekulation. Bei Ring-3-Crashes: erst Frame
-dumpen, dann theoretisieren.
+**Lesson:** `[SAVE-BAD]`-Logging am Frame-Save war in 5 Minuten ergiebiger
+als 5 Stunden Code-Spekulation. Bei Ring-3-Crashes: erst Frame dumpen,
+dann theoretisieren.
 
 ## Nächster Meilenstein
-A10c — IO-APIC (siehe roadmap.md)
+**A11.5** — TCP (3-Way-Handshake, HTTP-GET, FIN-Teardown).
+Scope: MVP ohne Retransmit (QEMU-SLIRP ist lossless). Ziel: `nc -l 8000`
+am Host, `httpget 10.0.2.2 8000 /` in NEXUS, Antwort wird ausgegeben.
 
-## A10c-2 (Phase 2, versucht und reverted, 2025-10-22)
-**Versuch:** `ioapic::route(1, 33, 0)` + `pic::unmask(1)` entfernen +
-`pic::eoi(1)` → `apic::eoi()` bei v==33.
+## A11.4 — UDP + Socket-Layer (Details)
 
-**Ergebnis:** Keyboard komplett stumm. Alle Tasten ignoriert, nur Enter
-kommt als leerer Prompt durch. Reproduzierbar über 2 Boots.
-
-**Revert:** `git checkout -- nexus.cpp` (Phase 2 war nicht committet).
-Build neu, Keyboard wieder da, alle Tests grün. Siehe Tag `v0.9-a10c-1-verified`.
-
-**Nächster Ansatz für Phase 2:**
-1. Debug-Print `[IRQ33] hit` in den kbd-Handler → kommt der IRQ überhaupt?
-2. `[IOAPIC-REDTBL]`-Dump nach `route()` → wie sieht der Redirection-Entry aus?
-3. Wenn IRQ ankommt aber Handler falsch reagiert: `ioapic::eoi()` zusätzlich
-   zu `apic::eoi()` schreiben (QEMU-q35-ISA-IRQs können level-triggered sein).
-4. Wenn IRQ gar nicht ankommt: prüfen ob PIC noch durchlässt, oder ob
-   IO-APIC-Pin-Maskierung (Bit 16 im Redirection-Lo) korrekt ist.
-
-## A10c-2 Diagnose (2025-10-22) — Keyboard-IRQ irrelevant
-**Befund:** Vector 33 feuert nie, `[IRQ33]`-Counter bleibt 0. Trotzdem
-funktioniert Keyboard (Shell-Input). Grund:
-
-QEMU-Aufruf ist `-serial stdio` → User-Input landet auf COM1 (0x3F8),
-nicht auf emulierter PS/2-Tastatur. Shell pollt COM1 in
-`kbd::getchar_nb()` (shell.cpp:1128, 1561). PS/2-IRQ-Pfad
-(`kbd::irq_handler` via Vector 33) ist **toter Code** im aktuellen Setup.
-
-**Konsequenz:** IO-APIC-Routing für Keyboard ist nicht nötig.
-`ioapic::route(1, 33, 0)` wird nicht gebaut — IO-APIC bleibt bereit für
-echte IRQ-Geräte (virtio-blk-IRQ, Netzwerk, später SMP).
-
-**Redirection-Table nach Reset:** alle Pins maskiert, vec=0, dest=0.
-Das ist der saubere Default — IO-APIC-Routing kann später zustandsfrei
-aufgesetzt werden.
-
-**Wenn PS/2-IRQ doch mal gebraucht wird:** QEMU im GTK-Fenster nutzen
-(statt `-serial stdio`), dann kommen echte PS/2-IRQs über Vector 33.
-Für den aktuellen Terminal-Workflow irrelevant.
-
-## A8b-2 (2025-10-22) — sys_exit sofort reapen
-**Fix:** `sys_exit` setzt `t->dead = 1` und triggert `g_syscall_suspend`.
-`task_syscall_suspend` erkennt `prev->dead`, markiert dead und wählt next.
-Fallback auf `task::idle`, falls kein anderer Task ready ist.
-
-**Verifiziert:** `bench 100` + `bench 10` ohne Crash, alle EXIT/REAP.
-`sys_yield` und `sys_exit` wechseln sofort, kein hlt-Wait mehr.
-
-**Nebenbefund:** ~100 Pages einmaliger Leak bei `bench 100` (Baseline 2132 → 2232).
-Nicht kumulativ (zweiter bench-Aufruf ändert nicht weiter). Verdacht: bench-Setup
-selbst. Wird in eigener Session untersucht (A8b-4+).
-
-**Offen (Session 3):** `started=0`-Tasks im Suspend-Pfad. Wenn ein gerade
-gespawnter Task (Ret-Path) sofort `sys_yield`/`sys_exit` macht, bevor er
-einmal gelaufen ist, könnte der Ret-Stack als iretq-Frame missinterpretiert
-werden. In der Praxis selten (erster Syscall ist meistens sys_write), aber
-sollte sauber abgedeckt werden.
-
-## A8b-3 (2025-10-22) — Suspend-Pfad unterstützt spawn-frame Tasks
-**Fix:** `task_syscall_suspend` setzt jetzt:
-- `prev->started = 1` (prev ist ab jetzt iretq-fähig)
-- `g_irq_next_mode = next->started ? 1 : 0` (ret-path vs iretq)
-- `next->started = 1` (nach Rückkehr ist next gestartet)
-
-Der Suspend-asm-Stub prüft `g_irq_next_mode` und springt bei 0 in den
-ret-Path (`pop r15/r14/r13/r12/rbp/rbx; ret`), sonst iretq.
-
-**Verifiziert:** `bench 10`, `bench 100`, `bench 10` hintereinander.
-Alle Tasks EXIT/REAP, kein Crash. 96-Page-Sockel nach bench 100
-(vorbestehend, nicht kumulativ, nicht Session-3-verursacht).
-
-**Status A8:** komplett.
-- sys_yield: suspendiert sofort
-- sys_exit: suspendiert sofort  
-- spawn-frame Tasks: korrekt (ret-path)
-
-## A11.4 — UDP + Socket-Layer (2025-10-22)
 **Was gebaut:**
 - `net::udp_open/send/recv/close/drain`
 - Syscalls 202-205 (Ring-3-Zugriff)
@@ -150,17 +115,14 @@ Alle Tasks EXIT/REAP, kein Crash. 96-Page-Sockel nach bench 100
 - Makefile: `hostfwd=udp::5000-10.0.2.15:5000`
 
 **Was getestet:**
-- ✅ TX: `udpsend 10.0.2.2 53 hello-nexus` → `[NET ] UDP TX -> 10.0.2.2:53 (11 bytes, src=5001)`
-- ⚠️ RX (Host→Guest via hostfwd): Timeout — **QEMU-SLIRP-Limitation**, nicht NEXUS-Bug.
-  SLIRP-UDP-hostfwd braucht einen "aktiven Flow" vom Guest, sonst wird
-  das Host-Paket verworfen. Beweis dass RX-Pfad grundsätzlich geht:
-  `ping 10.0.2.2` empfängt Replies über identischen `net_poll`-Pfad.
-
-**Bewertung:** UDP-Layer funktional. RX-Live-Test via hostfwd ist wegen
-QEMU-Limitation nicht reproduzierbar — wird in A11.5 mit TCP (das
-zuverlässig durch SLIRP geht) end-to-end verifiziert.
+- ✅ TX: `udpsend 10.0.2.2 53 hello-nexus` → `[NET ] UDP TX -> ...`
+- ⚠️ RX (Host→Guest via hostfwd): Timeout — QEMU-SLIRP-Limitation.
+  Beweis dass RX-Pfad grundsätzlich geht: `ping 10.0.2.2` empfängt
+  Replies über identischen `net_poll`-Pfad.
 
 **Syscall-Referenz:**
+- nr=200 `net_ping(dst_ip_be, count, timeout_ms)` → recv_count
+- nr=201 `net_mac(user_ptr6)` → 0
 - nr=202 `udp_open(port)` → idx (0..7) oder -1
 - nr=203 `udp_send(idx, dst_ip_be, dst_port, user_ptr, len)` → 0 oder neg
 - nr=204 `udp_recv(idx, user_buf, cap, timeout_ms)` → n oder neg
