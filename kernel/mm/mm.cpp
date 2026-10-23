@@ -65,22 +65,35 @@ u64 free_count() { return total() - used_count(); }
 // ---------------------------------------------------------------------------
 namespace slab {
 struct FreeNode { FreeNode* next; };
+struct ChunkHdr {
+    u64       phys;
+    u64       magic;
+    ChunkHdr* next;
+    u32       pages;
+    u32       objs_per_chunk;
+    u32       free_objs;
+    u32       _pad;
+};
+static constexpr u64 CHUNK_MAGIC = 0x534C41424348554BULL;   /* "SLABCHUK" */
 struct Class {
     u64       size;
     FreeNode* free_list;
     u64       in_use;
     u64       total;
     Spinlock  lock;
+    ChunkHdr* chunks;
+    u32       n_chunks;
+    u32       _pad;
 };
 static Class classes[] = {
-    {32,   nullptr, 0, 0, {0}},
-    {64,   nullptr, 0, 0, {0}},
-    {128,  nullptr, 0, 0, {0}},
-    {256,  nullptr, 0, 0, {0}},
-    {512,  nullptr, 0, 0, {0}},
-    {1024, nullptr, 0, 0, {0}},
-    {2048, nullptr, 0, 0, {0}},
-    {4096, nullptr, 0, 0, {0}},
+    {32,   nullptr, 0, 0, {0}, nullptr, 0, 0},
+    {64,   nullptr, 0, 0, {0}, nullptr, 0, 0},
+    {128,  nullptr, 0, 0, {0}, nullptr, 0, 0},
+    {256,  nullptr, 0, 0, {0}, nullptr, 0, 0},
+    {512,  nullptr, 0, 0, {0}, nullptr, 0, 0},
+    {1024, nullptr, 0, 0, {0}, nullptr, 0, 0},
+    {2048, nullptr, 0, 0, {0}, nullptr, 0, 0},
+    {4096, nullptr, 0, 0, {0}, nullptr, 0, 0},
 };
 static_assert(sizeof(classes)/sizeof(classes[0]) == NCLASSES, "slab::NCLASSES inkonsistent mit classes[]");
 static constexpr usize HDR_SIZE = 16;
@@ -98,23 +111,43 @@ static Class* pick(u64 total){     // total = HDR_SIZE + gewuenschte Groesse
 // Slab-Block: vorne die Free-List, dann die Header, dann die Daten
 // Wir allokieren Chunks vom Heap, zerlegen sie in Stuecke der Klasse.
 static void grow(Class* c){
-    usize chunk_pages = 4;                    // 16 KiB pro Wachstumsschritt
+    usize chunk_pages = 4;
     u64 phys = mem::pmm::alloc_n(chunk_pages);
+    if (!phys) {
+        hal::pf("[SLAB] grow OOM (size=%u)\n", (u32)c->size);
+        return;
+    }
     u8* chunk = (u8*)mem::p2v(phys);
     u64 chunk_bytes = chunk_pages * mem::pmm::PS;
-    // Header im Chunk-Kopf
-    struct ChunkHdr { u64 bytes; u64 _pad; };
-    ChunkHdr* ch = (ChunkHdr*)chunk;
-    ch->bytes = chunk_bytes;
-    ch->_pad = 0x534c41424348554bULL;        // "SLABCHUK"
-    u8* base = chunk + 16;
-    u64 count = (chunk_bytes - 16) / c->size;
-    for (u64 i = 0; i < count; i++) {
+    ChunkHdr* hdr = (ChunkHdr*)chunk;
+    hdr->phys           = phys;
+    hdr->magic          = CHUNK_MAGIC;
+    hdr->next           = c->chunks;
+    hdr->pages          = (u32)chunk_pages;
+    hdr->objs_per_chunk = (u32)((chunk_bytes - sizeof(ChunkHdr)) / c->size);
+    hdr->free_objs      = hdr->objs_per_chunk;
+    hdr->_pad           = 0;
+    c->chunks = hdr;
+    c->n_chunks++;
+
+    u8* base = chunk + sizeof(ChunkHdr);
+    for (u32 i = 0; i < hdr->objs_per_chunk; i++) {
         FreeNode* fn = (FreeNode*)(base + i * c->size);
         fn->next = c->free_list;
         c->free_list = fn;
     }
-    c->total += count;
+    c->total += hdr->objs_per_chunk;
+}
+
+/* Sucht den Chunk, in dem Slot-Adresse 'slot' liegt (nicht User-Pointer!). */
+static ChunkHdr* find_chunk(Class* c, void* slot) {
+    u64 a = (u64)slot;
+    for (ChunkHdr* cur = c->chunks; cur; cur = cur->next) {
+        u64 start = (u64)mem::p2v(cur->phys) + sizeof(ChunkHdr);
+        u64 end   = start + (u64)cur->objs_per_chunk * c->size;
+        if (a >= start && a < end) return cur;
+    }
+    return nullptr;
 }
 
 void* alloc(usize requested){
@@ -128,6 +161,8 @@ void* alloc(usize requested){
     FreeNode* n = c->free_list;
     c->free_list = n->next;
     c->in_use++;
+    { ChunkHdr* ch = find_chunk(c, n);
+      if (ch && ch->free_objs > 0) ch->free_objs--; }
     spin_unlock_irqrestore(&c->lock, rflags);
 
     u64* hdr = (u64*)n;
@@ -151,6 +186,8 @@ void free(void* p){
     n->next = c->free_list;
     c->free_list = n;
     c->in_use--;
+    { ChunkHdr* ch = find_chunk(c, n);
+      if (ch) ch->free_objs++; }
     spin_unlock_irqrestore(&c->lock, rflags);
 }
 
@@ -164,6 +201,65 @@ void dump(){
                 (u32)i, (u32)classes[i].size,
                 (u32)classes[i].in_use, (u32)classes[i].total);
 }
+/* trim(): gibt komplett leere Chunks an PMM zurueck. */
+void trim(){
+    u32 total_freed = 0;
+    for (u32 ci = 0; ci < NCLASSES; ci++) {
+        Class* c = &classes[ci];
+        u64 rflags = spin_lock_irqsave(&c->lock);
+
+        ChunkHdr* empty = nullptr;
+        ChunkHdr** prev = &c->chunks;
+        ChunkHdr* cur = c->chunks;
+        u32 n_removed = 0;
+        u32 objs_removed = 0;
+        while (cur) {
+            if (cur->free_objs == cur->objs_per_chunk) {
+                *prev = cur->next;
+                cur->next = empty;
+                empty = cur;
+                n_removed++;
+                objs_removed += cur->objs_per_chunk;
+                cur = *prev;
+            } else {
+                prev = &cur->next;
+                cur = cur->next;
+            }
+        }
+
+        if (empty) {
+            /* free_list bereinigen: Nodes in leeren Chunks entfernen */
+            FreeNode** fp = &c->free_list;
+            while (*fp) {
+                u64 addr = (u64)*fp;
+                bool in_empty = false;
+                for (ChunkHdr* e = empty; e; e = e->next) {
+                    u64 start = (u64)mem::p2v(e->phys) + sizeof(ChunkHdr);
+                    u64 end   = start + (u64)e->objs_per_chunk * c->size;
+                    if (addr >= start && addr < end) { in_empty = true; break; }
+                }
+                if (in_empty) *fp = (*fp)->next;
+                else          fp = &(*fp)->next;
+            }
+            if (c->total >= objs_removed) c->total -= objs_removed;
+            else                          c->total = 0;
+            if (c->n_chunks >= n_removed) c->n_chunks -= n_removed;
+            else                          c->n_chunks = 0;
+        }
+
+        spin_unlock_irqrestore(&c->lock, rflags);
+
+        ChunkHdr* e = empty;
+        while (e) {
+            ChunkHdr* nxt = e->next;
+            mem::pmm::free_n(e->phys, e->pages);
+            total_freed += e->pages;
+            e = nxt;
+        }
+    }
+    hal::pf("[SLAB] trim: %u pages freed\n", total_freed);
+}
+
 } // namespace slab
 
 namespace heap {

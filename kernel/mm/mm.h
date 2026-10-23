@@ -33,6 +33,7 @@ u64   total();
 u64   used();
 u64   bytes_used();
 void  dump();
+void  trim();
 }
 
 namespace heap {

@@ -1363,24 +1363,25 @@ static void cmd_r3kern() {
 // eine Busy-Loop wuerde minutenlang das Prompt blockieren).
 // Vorgehen: bench N -> warten -> mem, mem. Beide used-Werte muessen
 // gleich sein.
+static void cmd_slab_trim() {
+    u64 before = mem::pmm::used_count();
+    slab::trim();
+    u64 after = mem::pmm::used_count();
+    hal::pf("[SLAB] pmm %u -> %u (%u pages back)\n",
+            (u32)before, (u32)after, (u32)(before - after));
+}
+
 static void cmd_bench(int ac, char** av) {
     u64 n = 20;
     if (ac >= 2) { u64 v; if (shell_parse_num(av[1], &v)) n = v; }
     if (n > 100) n = 100;
 
     u64 start_used = mem::pmm::used_count();
-    u64 slab_u0 = slab::used(), slab_t0 = slab::total();
-    hal::pf("[BENCH] pre: pmm_used=%u slab_used=%u slab_total=%u\n",
-            (u32)start_used, (u32)slab_u0, (u32)slab_t0);
+    hal::pf("[BENCH] used=%u, spawning %u ring3 tasks...\n",
+            (u32)start_used, (u32)n);
     for (u64 i = 0; i < n; i++)
         task::spawn("bench", user_ring3_fn, nullptr);
-    u64 slab_u1 = slab::used(), slab_t1 = slab::total();
-    hal::pf("[BENCH] post: pmm_used=%u slab_used=%u slab_total=%u\n",
-            (u32)mem::pmm::used_count(), (u32)slab_u1, (u32)slab_t1);
-    hal::pf("[BENCH] delta: pmm=%+d slab_used=%+d slab_total=%+d\n",
-            (int)(mem::pmm::used_count() - start_used),
-            (int)(slab_u1 - slab_u0),
-            (int)(slab_t1 - slab_t0));
+    hal::pf("[BENCH] spawned. Warte ~5 Sekunden, dann 'mem' 2x aufrufen.\n");
 }
 
 // A3e: spawnt zwei Test-Tasks, die unterschiedliche Seeds schreiben und lesen.
@@ -2040,6 +2041,7 @@ static void dispatch() {
     if (streq(c, "r3bad"))                     { cmd_r3bad(); return; }
     if (streq(c, "r3kern"))                    { cmd_r3kern(); return; }
     if (streq(c, "bench"))                     { cmd_bench(argc, argv); return; }
+    if (streq(c, "slab-trim"))                  { cmd_slab_trim(); return; }
     if (streq(c, "a3e"))                       { cmd_a3e(); return; }
     if (streq(c, "run"))                       { cmd_run(argc, argv); return; }
     if (streq(c, "hello"))                     { cmd_hello(); return; }
