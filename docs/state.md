@@ -169,3 +169,28 @@ kleiner Timer/Reassembly-Mechanismus.
 
 **Was jetzt möglich ist:** NEXUS kann als Client mit dem Internet reden
 (via QEMU-SLIRP), HTTP-Anfragen stellen, Antworten ausgeben.
+
+## A11.6/7 — DNS + Gateway-Routing (2025-10-23)
+**Was gebaut:**
+- `kernel/dev/dns.cpp` — minimaler DNS-Resolver (A-Record only)
+- `net::dns_resolve(hostname, out_ip)` via QEMU-SLIRP DNS (10.0.2.3)
+- Syscall nr=220 (dns_resolve aus Ring-3)
+- Shell: `dns <hostname>`, `httpget <host>` (Host kann IP ODER Hostname sein)
+- `ip_send` Gateway-Routing: externe Ziele → ARP fuers Gateway (10.0.2.2),
+  IP-Header behaelt Ziel-IP
+
+**Was getestet:**
+- ✅ `dns example.com` → `104.20.23.154`
+- ✅ `httpget example.com 80 /` → echte HTTP/1.1-200-Antwort von Cloudflare
+- ✅ Lokales HTTP gegen Python-Server weiterhin OK
+
+**Erster echter Internet-Zugriff aus NEXUS.**
+
+**Bekannte Limitierung (offen):**
+- HTTP-Body bei `Transfer-Encoding: chunked` wird nicht dekodiert.
+  Response-Header kommen sauber, Body bleibt aus. Fix waere Chunked-Parser
+  in `cmd_httpget`. Fuer "HTTP-Download" (mit Content-Length) ist der
+  aktuelle Code ausreichend.
+- TCP-Segment-Reordering + FIN-im-selben-Poll-Durchlauf: funktioniert
+  aktuell, aber bei sehr schnellen Servern koennte das letzte Datensegment
+  vor FIN verloren gehen. Fix: FIN-Handling verzoegern bis Buffer leer.
