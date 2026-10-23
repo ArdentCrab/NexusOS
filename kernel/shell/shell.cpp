@@ -1369,11 +1369,18 @@ static void cmd_bench(int ac, char** av) {
     if (n > 100) n = 100;
 
     u64 start_used = mem::pmm::used_count();
-    hal::pf("[BENCH] used=%u, spawning %u ring3 tasks...\n",
-            (u32)start_used, (u32)n);
+    u64 slab_u0 = slab::used(), slab_t0 = slab::total();
+    hal::pf("[BENCH] pre: pmm_used=%u slab_used=%u slab_total=%u\n",
+            (u32)start_used, (u32)slab_u0, (u32)slab_t0);
     for (u64 i = 0; i < n; i++)
         task::spawn("bench", user_ring3_fn, nullptr);
-    hal::pf("[BENCH] spawned. Warte ~5 Sekunden, dann 'mem' 2x aufrufen.\n");
+    u64 slab_u1 = slab::used(), slab_t1 = slab::total();
+    hal::pf("[BENCH] post: pmm_used=%u slab_used=%u slab_total=%u\n",
+            (u32)mem::pmm::used_count(), (u32)slab_u1, (u32)slab_t1);
+    hal::pf("[BENCH] delta: pmm=%+d slab_used=%+d slab_total=%+d\n",
+            (int)(mem::pmm::used_count() - start_used),
+            (int)(slab_u1 - slab_u0),
+            (int)(slab_t1 - slab_t0));
 }
 
 // A3e: spawnt zwei Test-Tasks, die unterschiedliche Seeds schreiben und lesen.
