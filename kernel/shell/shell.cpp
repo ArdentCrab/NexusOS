@@ -1027,7 +1027,7 @@ static const char* type_name(u32 t) {
         case 0: return "TASK";  case 1: return "CONFIG"; case 2: return "EVENT";
         case 3: return "TRIGGER"; case 4: return "SYS"; case 5: return "FILE";
         case 6: return "NAME";
-        case 9: return "MSG"; default: return "?";
+        case 8: return "PATH"; case 9: return "MSG"; default: return "?";
     }
 }
 static bool parse_type_arg(const char* t, u32* out) {
