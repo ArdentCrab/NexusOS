@@ -20,6 +20,7 @@
 #include "kernel/dev/virtio_net.h"
 #include "kernel/dev/net.h"
 #include "kernel/dev/tcp.h"
+#include "kernel/dev/http.h"
 #include "kernel/dev/dns.h"
 #include "kernel/ipc/msg.h"
 
@@ -1611,7 +1612,8 @@ static void cmd_dns(int ac, char** av) {
 }
 
 static void cmd_httpget(int ac, char** av) {
-    if (ac < 4) { hal::ps("usage: httpget <ip> <port> <path>\n"); return; }
+    if (ac < 4) { hal::ps("usage: httpget <ip-or-host> <port> <path>\n"); return; }
+
     u8 ip[4];
     if (!_parse_ip4(av[1], ip)) {
         if (net::dns_resolve(av[1], ip) != 0) {
@@ -1619,43 +1621,36 @@ static void cmd_httpget(int ac, char** av) {
             return;
         }
     }
+
     u32 port = 0;
-    for (const char* p = av[2]; *p >= '0' && *p <= '9'; p++) port = port * 10 + (u32)(*p - '0');
+    for (const char* q = av[2]; *q >= '0' && *q <= '9'; q++)
+        port = port * 10 + (u32)(*q - '0');
     if (port == 0 || port > 65535) { hal::ps("bad port\n"); return; }
+
     const char* path = av[3];
-    int idx = net::tcp_open();
-    if (idx < 0) { hal::ps("no free tcp slot\n"); return; }
-    hal::pf("[HTTP] connecting to %u.%u.%u.%u:%u\n",
-            ip[0], ip[1], ip[2], ip[3], port);
-    if (net::tcp_connect((u32)idx, ip, (u16)port) != 0) {
-        hal::ps("[HTTP] connect failed\n");
-        net::tcp_close((u32)idx);
+    u8 body[8192];
+    u32 body_len = 0;
+
+    hal::pf("[HTTP] GET %s (dst=%u.%u.%u.%u:%u)\n",
+            path, ip[0], ip[1], ip[2], ip[3], port);
+
+    int status = net::http_get(ip, av[1], (u16)port, path,
+                               body, sizeof(body), &body_len,
+                               true, 5000);
+
+    if (status < 0) {
+        hal::pf("\n[HTTP] transport error %d\n", status);
         return;
     }
-    char req[256];
-    u32 p = 0;
-    const char* pre = "GET ";
-    while (*pre) req[p++] = *pre++;
-    while (*path) req[p++] = *path++;
-    const char* mid = " HTTP/1.1\r\nHost: ";
-    while (*mid) req[p++] = *mid++;
-    for (const char* h = av[1]; *h && p < sizeof(req) - 40; h++) req[p++] = *h;
-    const char* mid2 = "\r\nConnection: close\r\n\r\n";
-    while (*mid2) req[p++] = *mid2++;
-    net::tcp_send((u32)idx, (const u8*)req, p);
-    hal::ps("[HTTP] --- response ---\n");
-    u8 buf[512];
-    u32 total = 0;
-    for (;;) {
-        int n = net::tcp_recv((u32)idx, buf, sizeof(buf), 3000);
-        if (n < 0) { hal::ps("[HTTP] recv timeout\n"); break; }
-        if (n == 0) break;
-        for (int i = 0; i < n; i++) hal::pc((char)buf[i]);
-        total += (u32)n;
+
+    hal::pf("\n[HTTP] status=%d, body=%u bytes\n", status, body_len);
+    if (body_len > 0) {
+        hal::ps("--- body ---\n");
+        for (u32 k = 0; k < body_len; k++) hal::pc((char)body[k]);
+        hal::ps("\n--- end ---\n");
+    } else {
+        hal::ps("[HTTP] empty body\n");
     }
-    hal::ps("\n[HTTP] --- end ---\n");
-    hal::pf("[HTTP] %u bytes total\n", total);
-    net::tcp_close((u32)idx);
 }
 
 static void cmd_msgsend(int ac, char** av) {

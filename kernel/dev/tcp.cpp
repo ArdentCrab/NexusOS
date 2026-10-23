@@ -15,7 +15,7 @@ struct TcpSocket {
     u32  snd_nxt;
     u32  rcv_nxt;
     u32  snd_isn;
-    u8   rx_buf[4][256];
+    u8   rx_buf[8][1460];
     u16  rx_len[4];
     u32  rx_head, rx_tail;
 };
@@ -141,11 +141,11 @@ int tcp_recv(u32 idx, u8* buf, u32 cap, u32 timeout_ms) {
         ip_drain();
         TcpSocket* s = &g_tcp[idx];
         if (s->rx_head != s->rx_tail) {
-            u32 slot = s->rx_tail % 4;
+            u32 slot = s->rx_tail % 8;
             u32 n = s->rx_len[slot];
             if (n > cap) n = cap;
             for (u32 k = 0; k < n; k++) buf[k] = s->rx_buf[slot][k];
-            s->rx_tail = (s->rx_tail + 1) % 4;
+            s->rx_tail = (s->rx_tail + 1) % 8;
             return (int)n;
         }
         if (s->state == TCP_CLOSED) return 0;
@@ -180,7 +180,7 @@ void tcp_handle_frame(const u8 src_ip[4], const u8* tcp, u32 len) {
     u32 paylen   = len - ihl;
     const u8* payload = tcp + ihl;
 
-    for (u32 i = 0; i < 4; i++) {
+    for (u32 i = 0; i < 8; i++) {
         TcpSocket* s = &g_tcp[i];
         if (!s->used) continue;
         if (s->local_port != dst_port) continue;
@@ -200,6 +200,17 @@ void tcp_handle_frame(const u8 src_ip[4], const u8* tcp, u32 len) {
             return;
         }
         if ((flags & TCP_FIN) && s->state >= TCP_ESTABLISHED) {
+            // A-final: payload vor state=CLOSED puffern.
+            if (paylen > 0) {
+                u32 slot = s->rx_head % 8;
+                u32 nxt  = (s->rx_head + 1) % 8;
+                if (nxt != s->rx_tail) {
+                    u32 cp = paylen > 1460 ? 1460 : paylen;
+                    for (u32 k = 0; k < cp; k++) s->rx_buf[slot][k] = payload[k];
+                    s->rx_len[slot] = (u16)cp;
+                    s->rx_head = nxt;
+                }
+            }
             s->rcv_nxt = seq + paylen + 1;
             tcp_xmit(s, TCP_ACK, nullptr, 0);
             s->state = TCP_CLOSED;
@@ -207,15 +218,15 @@ void tcp_handle_frame(const u8 src_ip[4], const u8* tcp, u32 len) {
             return;
         }
         if (s->state == TCP_ESTABLISHED && paylen > 0) {
-            u32 slot = s->rx_head % 4;
-            u32 nxt  = (s->rx_head + 1) % 4;
+            u32 slot = s->rx_head % 8;
+            u32 nxt  = (s->rx_head + 1) % 8;
             if (nxt != s->rx_tail) {
-                u32 cp = paylen > 256 ? 256 : paylen;
+                u32 cp = paylen > 1460 ? 1460 : paylen;
                 for (u32 k = 0; k < cp; k++) s->rx_buf[slot][k] = payload[k];
                 s->rx_len[slot] = (u16)cp;
                 s->rx_head = nxt;
             }
-            s->rcv_nxt = seq + paylen;
+                s->rcv_nxt = seq + paylen;      // DATA-Branch: keine +1 (FIN kommt im FIN-Branch)
             tcp_xmit(s, TCP_ACK, nullptr, 0);
             return;
         }
