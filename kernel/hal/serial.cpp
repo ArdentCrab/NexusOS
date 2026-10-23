@@ -14,7 +14,31 @@ static int  log_count = 0;
 static int  log_pos   = 0;
 static char g_log_prefix = 'I';
 
-static inline void pc_raw(char c){ while(!(inb(0x3F8+5)&0x20)){} outb(0x3F8,(u8)c); }
+extern "C" volatile u32 g_shell_input_active = 0;
+
+static constexpr u32 STREAM_BUF_SIZE = 1024;
+static char g_stream_buf[STREAM_BUF_SIZE];
+static u32  g_stream_head = 0, g_stream_tail = 0;
+static bool g_log_in_flush = false;
+
+static inline void pc_raw_force(char c) {
+    while(!(inb(0x3F8+5)&0x20)){} outb(0x3F8,(u8)c);
+}
+
+static bool buffer_char(char c) {
+    if (!g_shell_input_active) return false;
+    if (g_log_in_flush) return false;
+    u32 nxt = (g_stream_head + 1) % STREAM_BUF_SIZE;
+    if (nxt == g_stream_tail) return true;
+    g_stream_buf[g_stream_head] = c;
+    g_stream_head = nxt;
+    return true;
+}
+
+static inline void pc_raw(char c){
+    if (buffer_char(c)) return;
+    pc_raw_force(c);
+}
 static void ps_raw(const char* s){ while(*s) pc_raw(*s++); }
 static void pu_raw_w(u64 v, u32 base, int width, char pad){
     char b[24]; int n=0; const char* d="0123456789abcdef";
@@ -84,6 +108,33 @@ void pf(const char* f, ...){
         else { pc_raw('%'); pc_raw(*f); }
     }
     __builtin_va_end(ap);
+    serial_unlock();
+}
+
+bool stream_pending() { return g_stream_head != g_stream_tail; }
+
+void log_flush_and_redraw(const char* prompt, const char* line, u32 len) {
+    if (!g_shell_input_active) return;
+    if (g_stream_head == g_stream_tail) return;
+    serial_lock();
+    g_log_in_flush = true;
+    pc_raw_force('\r');
+    pc_raw_force(0x1B); pc_raw_force('['); pc_raw_force('K');
+    while (g_stream_tail != g_stream_head) {
+        char c = g_stream_buf[g_stream_tail];
+        g_stream_tail = (g_stream_tail + 1) % STREAM_BUF_SIZE;
+        pc_raw_force(c);
+    }
+    if (prompt) { while (*prompt) pc_raw_force(*prompt++); }
+    for (u32 i = 0; i < len; i++) pc_raw_force(line[i]);
+    g_log_in_flush = false;
+    serial_unlock();
+}
+
+void echo_pc(char c) { serial_lock(); pc_raw_force(c); serial_unlock(); }
+void echo_ps(const char* s) {
+    serial_lock();
+    while (*s) pc_raw_force(*s++);
     serial_unlock();
 }
 

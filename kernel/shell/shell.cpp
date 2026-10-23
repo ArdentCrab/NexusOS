@@ -2091,7 +2091,11 @@ static void tokenize() {
 
 void task_fn(void*) {
     hal::ps("\nNEXUS> ");
+    hal::g_shell_input_active = 1;
     for (;;) {
+        if (hal::stream_pending()) {
+            hal::log_flush_and_redraw("NEXUS> ", line_buf, (u32)line_len);
+        }
         int ch = kbd::getchar_nb();
         if (ch < 0) {
             for (int i = 0; i < 2000; i++) __asm__ volatile("" ::: "memory");
@@ -2099,21 +2103,23 @@ void task_fn(void*) {
         }
         char c = (char)ch;
         if (c == '\n' || c == '\r') {
+            hal::g_shell_input_active = 0;
             hal::pc('\n');
             line_buf[line_len] = 0;
             tokenize();
             dispatch();
             line_len = 0;
             hal::ps("NEXUS> ");
+            hal::g_shell_input_active = 1;
         } else if (c == '\b' || c == 127) {
             if (line_len > 0) {
                 line_len--;
-                hal::ps("\b \b");
+                hal::echo_ps("\b \b");
             }
         } else if (c >= 32 && c < 127) {
             if (line_len < 127) {
                 line_buf[line_len++] = c;
-                hal::pc(c);
+                hal::echo_pc(c);
             }
         }
     }

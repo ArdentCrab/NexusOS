@@ -45,6 +45,12 @@ void pc(char c);
 void ps(const char* s);
 void pf(const char* f, ...);
 
+extern "C" volatile u32 g_shell_input_active;
+bool stream_pending();
+void log_flush_and_redraw(const char* prompt, const char* line, u32 len);
+void echo_pc(char c);
+void echo_ps(const char* s);
+
 // --- Log-System ---
 enum : u32 { LOG_DEBUG=0, LOG_INFO=1, LOG_WARN=2, LOG_ERROR=3 };
 extern u32 g_log_level;
