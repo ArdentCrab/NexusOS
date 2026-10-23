@@ -20,6 +20,7 @@
 #include "kernel/dev/virtio_net.h"
 #include "kernel/dev/net.h"
 #include "kernel/dev/tcp.h"
+#include "kernel/dev/dns.h"
 
 // Symbole aus nexus.cpp (S11c: nach main/ oder test_helpers/ verschieben)
 extern void user_ring3_fn(void* arg);
@@ -1594,10 +1595,27 @@ static bool _parse_ip4(const char* str, u8 out[4]) {
     return false;
 }
 
+static void cmd_dns(int ac, char** av) {
+    if (ac < 2) { hal::ps("usage: dns <hostname>\n"); return; }
+    u8 ip[4] = {0};
+    int r = net::dns_resolve(av[1], ip);
+    if (r == 0) {
+        hal::pf("%s -> %u.%u.%u.%u\n",
+                av[1], ip[0], ip[1], ip[2], ip[3]);
+    } else {
+        hal::pf("dns fail (err %d)\n", r);
+    }
+}
+
 static void cmd_httpget(int ac, char** av) {
     if (ac < 4) { hal::ps("usage: httpget <ip> <port> <path>\n"); return; }
     u8 ip[4];
-    if (!_parse_ip4(av[1], ip)) { hal::ps("bad ip\n"); return; }
+    if (!_parse_ip4(av[1], ip)) {
+        if (net::dns_resolve(av[1], ip) != 0) {
+            hal::ps("[HTTP] bad ip and dns failed\n");
+            return;
+        }
+    }
     u32 port = 0;
     for (const char* p = av[2]; *p >= '0' && *p <= '9'; p++) port = port * 10 + (u32)(*p - '0');
     if (port == 0 || port > 65535) { hal::ps("bad port\n"); return; }
@@ -1616,8 +1634,11 @@ static void cmd_httpget(int ac, char** av) {
     const char* pre = "GET ";
     while (*pre) req[p++] = *pre++;
     while (*path) req[p++] = *path++;
-    const char* mid = " HTTP/1.1\r\nHost: 10.0.2.2\r\nConnection: close\r\n\r\n";
+    const char* mid = " HTTP/1.1\r\nHost: ";
     while (*mid) req[p++] = *mid++;
+    for (const char* h = av[1]; *h && p < sizeof(req) - 40; h++) req[p++] = *h;
+    const char* mid2 = "\r\nConnection: close\r\n\r\n";
+    while (*mid2) req[p++] = *mid2++;
     net::tcp_send((u32)idx, (const u8*)req, p);
     hal::ps("[HTTP] --- response ---\n");
     u8 buf[512];
@@ -1919,6 +1940,7 @@ static void dispatch() {
     if (streq(c, "r3httpget"))                  { cmd_r3httpget(argc, argv); return; }
     if (streq(c, "udpsend"))                    { cmd_udpsend(argc, argv); return; }
     if (streq(c, "httpget"))                    { cmd_httpget(argc, argv); return; }
+    if (streq(c, "dns"))                        { cmd_dns(argc, argv); return; }
     if (streq(c, "udprecv"))                    { cmd_udprecv(argc, argv); return; }
     if (streq(c, "blk"))                       { cmd_blk(argc, argv); return; }
     if (streq(c, "sync"))                      { cmd_sync(); return; }

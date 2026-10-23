@@ -79,15 +79,27 @@ int ip_send(const u8 dst[4], u8 proto, const u8* payload, u32 len) {
     if (!f || !f->up) return -1;
     if (len + 20 + 14 > 1514) return -1;
 
+    // A11.7: Routing — lokal vs. via Gateway
+    // Bei /24: lokal wenn dst[0..2] == iface->ip[0..2]. Sonst Gateway.
+    bool local = (dst[0] == f->ip[0] &&
+                  dst[1] == f->ip[1] &&
+                  dst[2] == f->ip[2]);
+    u8 next_hop[4];
+    if (local) {
+        for (int i = 0; i < 4; i++) next_hop[i] = dst[i];
+    } else {
+        for (int i = 0; i < 4; i++) next_hop[i] = f->gw[i];
+    }
+
     u8 mac[6];
-    if (!arp_lookup(dst, mac)) {
-        int r = virtio_net::arp_resolve(dst, mac);
+    if (!arp_lookup(next_hop, mac)) {
+        int r = virtio_net::arp_resolve(next_hop, mac);
         if (r != 0) {
-            hal::pf("[NET ] ip_send: arp fail for %u.%u.%u.%u (err %d)\n",
-                    dst[0], dst[1], dst[2], dst[3], r);
+            hal::pf("[NET ] ip_send: arp fail for next_hop %u.%u.%u.%u (err %d)\n",
+                    next_hop[0], next_hop[1], next_hop[2], next_hop[3], r);
             return -2;
         }
-        arp_cache_put(dst, mac);
+        arp_cache_put(next_hop, mac);
     }
 
     u8 frame[1514];

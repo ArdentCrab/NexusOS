@@ -9,6 +9,7 @@
 #include "kernel/hal/hal.h"
 #include "kernel/dev/net.h"
 #include "kernel/dev/tcp.h"
+#include "kernel/dev/dns.h"
 
 // A8b: externe Symbole aus nexus.cpp + eigenes Flag (extern "C" für asm)
 extern "C" volatile u32 g_irq_next_mode;
@@ -277,6 +278,24 @@ extern "C" u64 syscall_dispatch(u64* regs) {
     if (nr == 213) {
         if (!vmm::user_range_ok(a1, a2, true)) return (u64)(i64)-14;
         return (u64)(i64)net::tcp_recv((u32)a0, (u8*)a1, (u32)a2, (u32)regs[2]);
+    }
+        if (nr == 220) {  // dns_resolve(user_hostname, user_out_ip4)
+        if (!vmm::user_range_ok(a0, 1, false)) return (u64)(i64)-14;
+        if (!vmm::user_range_ok(a1, 4, true)) return (u64)(i64)-14;
+        char host[128];
+        u32 hl = 0;
+        for (; hl < 127; hl++) {
+            if (!vmm::user_range_ok(a0 + hl, 1, false)) return (u64)(i64)-14;
+            char c = ((const char*)a0)[hl];
+            host[hl] = c;
+            if (c == 0) break;
+        }
+        host[hl] = 0;
+        u8 out_ip[4] = {0};
+        int r = net::dns_resolve(host, out_ip);
+        if (r < 0) return (u64)(i64)r;
+        for (int i = 0; i < 4; i++) ((u8*)a1)[i] = out_ip[i];
+        return 0;
     }
     return (u64)E_NOSYS;
 }
