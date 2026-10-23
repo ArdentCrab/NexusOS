@@ -127,3 +127,45 @@ am Host, `httpget 10.0.2.2 8000 /` in NEXUS, Antwort wird ausgegeben.
 - nr=203 `udp_send(idx, dst_ip_be, dst_port, user_ptr, len)` → 0 oder neg
 - nr=204 `udp_recv(idx, user_buf, cap, timeout_ms)` → n oder neg
 - nr=205 `udp_close(idx)` → 0
+
+## A11.5 — TCP + HTTP-Client (MVP) (2025-10-23)
+**Was gebaut:**
+- `kernel/dev/tcp.cpp` — TCP-Client mit State-Machine
+  (CLOSED → SYN_SENT → ESTABLISHED → FIN_WAIT)
+- `net::tcp_open/connect/send/recv/close`
+- `net::ip_drain()` — zentraler IP-Dispatch für UDP+TCP
+- Syscalls 210-213 (tcp_open/connect/send/recv)
+- Shell: `httpget <ip> <port> <path>`
+
+**Was getestet:**
+- ✅ End-to-End HTTP-Client: `httpget 10.0.2.2 8000 /`
+  - SYN → SYN/ACK → ACK (Handshake)
+  - GET / HTTP/1.1 raus, 200 OK + Body rein
+  - FIN-Teardown sauber
+- Host-Python-Server sah: `GET / HTTP/1.1\r\nHost: 10.0.2.2\r\nConnection: close`
+
+**Nicht implementiert (MVP-Scope):**
+- Kein Retransmit (QEMU-SLIRP ist lossless)
+- Kein Window-Advertising (Window im Header fix 1460)
+- Kein Sliding-Window / Congestion-Control
+- Keine Out-of-Order-Reassembly (setzt in-order voraus)
+
+**Offenes Detail:** Wenn Server Daten UND FIN in schneller Folge sendet,
+verarbeitet `ip_drain` beide im selben Poll-Durchlauf. Aktuell OK, weil
+`tcp_recv` erst Buffer leert, dann EOF gibt. Bei größeren Responses
+mit Segment-Reordering könnte das Probleme machen — Fix wäre ein
+kleiner Timer/Reassembly-Mechanismus.
+
+## A11 komplett — Netzwerk-Stack L2→L7-Client
+
+| Layer | Status | Tag |
+|-------|--------|-----|
+| virtio-net L2 | ✅ | v0.9-a11-1 |
+| ARP + TX/RX | ✅ | v0.9-a11-2 |
+| IPv4 + ICMP | ✅ | v0.9-a11-3a |
+| Ring-3-Ping | ✅ | v0.9-a11-3b |
+| UDP + Socket | ✅ | v0.9-a11-4b |
+| TCP + HTTP | ✅ | v0.9-a11-5 |
+
+**Was jetzt möglich ist:** NEXUS kann als Client mit dem Internet reden
+(via QEMU-SLIRP), HTTP-Anfragen stellen, Antworten ausgeben.
