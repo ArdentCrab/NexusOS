@@ -135,13 +135,14 @@ bool remove(u64 key){
         Rec* freed = nullptr;
         root = del(root, key, &freed);
         if (root) root->color = BLACK;
+        u32 removed_type = 0;
         if (freed) {
-            // Knoten physisch freigeben
+            removed_type = freed->type;
             ::operator delete((void*)freed);
         }
         count = count - 1;
         spin_unlock_irqrestore(&lock, rflags);
-        if (!nexus_wal_in_recovery()) nexus_wal_remove(key);
+        if (!nexus_wal_in_recovery()) nexus_wal_remove(key, removed_type);
         return true;
     }
     spin_unlock_irqrestore(&lock, rflags);

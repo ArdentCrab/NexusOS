@@ -21,6 +21,7 @@
 #include "kernel/dev/net.h"
 #include "kernel/dev/tcp.h"
 #include "kernel/dev/dns.h"
+#include "kernel/ipc/msg.h"
 
 // Symbole aus nexus.cpp (S11c: nach main/ oder test_helpers/ verschieben)
 extern void user_ring3_fn(void* arg);
@@ -500,6 +501,7 @@ static void cmd_get(int ac, char** av) {
         case idx::Type::NAME:    tname = "NAME";    break;
         case idx::Type::DIR:     tname = "DIR";     break;
         case idx::Type::PATH:    tname = "PATH";    break;
+        case idx::Type::MSG:     tname = "MSG";     break;
     }
     hal::pf("%p  type=%s  a=%p  b=%p\n", key, tname, r->a, r->b);
 }
@@ -1024,7 +1026,8 @@ static const char* type_name(u32 t) {
     switch (t) {
         case 0: return "TASK";  case 1: return "CONFIG"; case 2: return "EVENT";
         case 3: return "TRIGGER"; case 4: return "SYS"; case 5: return "FILE";
-        case 6: return "NAME"; default: return "?";
+        case 6: return "NAME";
+        case 9: return "MSG"; default: return "?";
     }
 }
 static bool parse_type_arg(const char* t, u32* out) {
@@ -1655,6 +1658,56 @@ static void cmd_httpget(int ac, char** av) {
     net::tcp_close((u32)idx);
 }
 
+static void cmd_msgsend(int ac, char** av) {
+    if (ac < 3) { hal::ps("usage: msgsend <ch> <text>\n"); return; }
+    u32 ch = 0;
+    for (const char* p = av[1]; *p >= '0' && *p <= '9'; p++)
+        ch = ch * 10 + (u32)(*p - '0');
+    if (ch >= 16) { hal::ps("bad channel (0-15)\n"); return; }
+    u32 len = 0;
+    while (av[2][len] && len < 255) len++;
+    int r = ipc::msg_send((u8)ch, (const u8*)av[2], len);
+    if (r < 0) hal::pf("msgsend: err %d\n", r);
+    else       hal::pf("[MSG] sent %u bytes to ch=%u\n", len, ch);
+}
+
+static void cmd_msgrecv(int ac, char** av) {
+    if (ac < 2) { hal::ps("usage: msgrecv <ch> [timeout_ms]\n"); return; }
+    u32 ch = 0;
+    for (const char* p = av[1]; *p >= '0' && *p <= '9'; p++)
+        ch = ch * 10 + (u32)(*p - '0');
+    if (ch >= 16) { hal::ps("bad channel\n"); return; }
+    u32 to = 1000;
+    if (ac >= 3) {
+        u32 v = 0;
+        for (const char* p = av[2]; *p >= '0' && *p <= '9'; p++)
+            v = v * 10 + (u32)(*p - '0');
+        if (v > 0 && v <= 30000) to = v;
+    }
+    u8 buf[256];
+    int r = ipc::msg_recv((u8)ch, buf, sizeof(buf), to);
+    if (r < 0) {
+        if (r == -110) hal::ps("[MSG] timeout\n");
+        else           hal::pf("[MSG] err %d\n", r);
+        return;
+    }
+    hal::pf("[MSG] rx %d bytes from ch=%u: '", r, ch);
+    for (int i = 0; i < r; i++) hal::pc((char)buf[i]);
+    hal::ps("'\n");
+}
+
+static void cmd_msgs() {
+    u32 used = 0, total = 0;
+    u64 seq = 0;
+    ipc::msg_stats(&used, &total, &seq);
+    hal::pf("msg pool: %u/%u slots, seq=%lu\n", used, total, seq);
+    // Zaehle MSG-Records im Index
+    struct C { u32 n; } c = {0};
+    idx::scan(idx::Type::MSG,
+              [](idx::Rec*, void* vp) { ((C*)vp)->n++; }, &c);
+    hal::pf("idx: %u MSG-Records\n", c.n);
+}
+
 static void cmd_udpsend(int ac, char** av) {
     if (ac < 4) { hal::ps("usage: udpsend <ip> <port> <text>\n"); return; }
     u8 ip[4];
@@ -1956,6 +2009,9 @@ static void dispatch() {
     if (streq(c, "piper-async"))               { cmd_piper_async(argc, argv); return; }
     if (streq(c, "pipe-test"))                 { cmd_pipe_test(argc, argv); return; }
     if (streq(c, "sub"))                       { cmd_sub(argc, argv); return; }
+    if (streq(c, "msgsend"))                    { cmd_msgsend(argc, argv); return; }
+    if (streq(c, "msgrecv"))                    { cmd_msgrecv(argc, argv); return; }
+    if (streq(c, "msgs"))                       { cmd_msgs(); return; }
     if (streq(c, "sub-reset"))                 { cmd_sub_reset(); return; }
     if (streq(c, "mkdir"))                     { cmd_mkdir(argc, argv); return; }
     if (streq(c, "rmdir"))                     { cmd_rmdir(argc, argv); return; }

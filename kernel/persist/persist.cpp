@@ -184,8 +184,8 @@ void wal_append_put(u64 key, u32 type, u64 a, u64 b) {
     if (g_puts_since_sync >= AUTOSYNC_PUT_THRESHOLD)
         g_autosync_pending = true;
 }
-void wal_append_remove(u64 key) {
-    wal_append_internal(1, 0, key, 0, 0);
+void wal_append_remove(u64 key, u32 type) {
+    wal_append_internal(1, type, key, 0, 0);
     g_puts_since_sync = g_puts_since_sync + 1;
     if (g_puts_since_sync >= AUTOSYNC_PUT_THRESHOLD)
         g_autosync_pending = true;
@@ -659,10 +659,10 @@ extern "C" void nexus_wal_put(u64 key, u32 type, u64 a, u64 b) {
     if (type == 0 || type == 2 || type == 3) return;
     persist::wal_append_put(key, type, a, b);
 }
-extern "C" void nexus_wal_remove(u64 key) {
+extern "C" void nexus_wal_remove(u64 key, u32 type) {
     u64 ns = key & 0xFF00000000000000ULL;
     if (ns == (0x02ULL << 56) || ns == (0x03ULL << 56)) return;  // TASK/EVENT
-    persist::wal_append_remove(key);
+    persist::wal_append_remove(key, type);
 }
 extern "C" bool nexus_wal_in_recovery() {
     return persist::wal_in_recovery();

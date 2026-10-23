@@ -23,7 +23,7 @@ int  load();
 int  wal_replay();
 void wal_reset();
 void wal_append_put(u64 key, u32 type, u64 a, u64 b);
-void wal_append_remove(u64 key);
+void wal_append_remove(u64 key, u32 type);
 
 using WalApplyFn = void(*)(u8 op, u8 type, u64 key, u64 a, u64 b);
 void wal_set_apply(WalApplyFn fn);

@@ -5,7 +5,7 @@
 #include "kernel/hal/hal.h"
 
 extern "C" void nexus_wal_put(u64 key, u32 type, u64 a, u64 b);
-extern "C" void nexus_wal_remove(u64 key);
+extern "C" void nexus_wal_remove(u64 key, u32 type);
 extern "C" bool nexus_wal_in_recovery();
 
 #endif
