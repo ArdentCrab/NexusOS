@@ -19,6 +19,7 @@
 #include "kernel/trig/trig.h"
 #include "kernel/dev/virtio_net.h"
 #include "kernel/dev/net.h"
+#include "kernel/dev/tcp.h"
 
 // Symbole aus nexus.cpp (S11c: nach main/ oder test_helpers/ verschieben)
 extern void user_ring3_fn(void* arg);
@@ -1593,6 +1594,46 @@ static bool _parse_ip4(const char* str, u8 out[4]) {
     return false;
 }
 
+static void cmd_httpget(int ac, char** av) {
+    if (ac < 4) { hal::ps("usage: httpget <ip> <port> <path>\n"); return; }
+    u8 ip[4];
+    if (!_parse_ip4(av[1], ip)) { hal::ps("bad ip\n"); return; }
+    u32 port = 0;
+    for (const char* p = av[2]; *p >= '0' && *p <= '9'; p++) port = port * 10 + (u32)(*p - '0');
+    if (port == 0 || port > 65535) { hal::ps("bad port\n"); return; }
+    const char* path = av[3];
+    int idx = net::tcp_open();
+    if (idx < 0) { hal::ps("no free tcp slot\n"); return; }
+    hal::pf("[HTTP] connecting to %u.%u.%u.%u:%u\n",
+            ip[0], ip[1], ip[2], ip[3], port);
+    if (net::tcp_connect((u32)idx, ip, (u16)port) != 0) {
+        hal::ps("[HTTP] connect failed\n");
+        net::tcp_close((u32)idx);
+        return;
+    }
+    char req[256];
+    u32 p = 0;
+    const char* pre = "GET ";
+    while (*pre) req[p++] = *pre++;
+    while (*path) req[p++] = *path++;
+    const char* mid = " HTTP/1.1\r\nHost: 10.0.2.2\r\nConnection: close\r\n\r\n";
+    while (*mid) req[p++] = *mid++;
+    net::tcp_send((u32)idx, (const u8*)req, p);
+    hal::ps("[HTTP] --- response ---\n");
+    u8 buf[512];
+    u32 total = 0;
+    for (;;) {
+        int n = net::tcp_recv((u32)idx, buf, sizeof(buf), 3000);
+        if (n < 0) { hal::ps("[HTTP] recv timeout\n"); break; }
+        if (n == 0) break;
+        for (int i = 0; i < n; i++) hal::pc((char)buf[i]);
+        total += (u32)n;
+    }
+    hal::ps("\n[HTTP] --- end ---\n");
+    hal::pf("[HTTP] %u bytes total\n", total);
+    net::tcp_close((u32)idx);
+}
+
 static void cmd_udpsend(int ac, char** av) {
     if (ac < 4) { hal::ps("usage: udpsend <ip> <port> <text>\n"); return; }
     u8 ip[4];
@@ -1705,6 +1746,7 @@ static void dispatch() {
     if (streq(c, "ping"))                      { cmd_ping(argc, argv); return; }
     if (streq(c, "r3ping"))                     { cmd_r3ping(argc, argv); return; }
     if (streq(c, "udpsend"))                    { cmd_udpsend(argc, argv); return; }
+    if (streq(c, "httpget"))                    { cmd_httpget(argc, argv); return; }
     if (streq(c, "udprecv"))                    { cmd_udprecv(argc, argv); return; }
     if (streq(c, "blk"))                       { cmd_blk(argc, argv); return; }
     if (streq(c, "sync"))                      { cmd_sync(); return; }

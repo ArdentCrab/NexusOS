@@ -8,6 +8,7 @@
 #include "kernel/mm/mm.h"
 #include "kernel/hal/hal.h"
 #include "kernel/dev/net.h"
+#include "kernel/dev/tcp.h"
 
 // A8b: externe Symbole aus nexus.cpp + eigenes Flag (extern "C" für asm)
 extern "C" volatile u32 g_irq_next_mode;
@@ -261,6 +262,21 @@ extern "C" u64 syscall_dispatch(u64* regs) {
     }
     if (nr == 205) {  // udp_close(idx)
         return (u64)(i64)net::udp_close((u32)a0);
+    }
+        if (nr == 210) return (u64)(i64)net::tcp_open();
+    if (nr == 211) {
+        u8 dst[4];
+        dst[0] = (u8)((a1 >> 24) & 0xFF); dst[1] = (u8)((a1 >> 16) & 0xFF);
+        dst[2] = (u8)((a1 >>  8) & 0xFF); dst[3] = (u8)((a1      ) & 0xFF);
+        return (u64)(i64)net::tcp_connect((u32)a0, dst, (u16)a2);
+    }
+    if (nr == 212) {
+        if (!vmm::user_range_ok(a1, a2, false)) return (u64)(i64)-14;
+        return (u64)(i64)net::tcp_send((u32)a0, (const u8*)a1, (u32)a2);
+    }
+    if (nr == 213) {
+        if (!vmm::user_range_ok(a1, a2, true)) return (u64)(i64)-14;
+        return (u64)(i64)net::tcp_recv((u32)a0, (u8*)a1, (u32)a2, (u32)regs[2]);
     }
     return (u64)E_NOSYS;
 }

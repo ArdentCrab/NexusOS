@@ -51,6 +51,7 @@ bool arp_lookup(const u8 ip[4], u8 out_mac[6]);
 void arp_cache_put(const u8 ip[4], const u8 mac[6]);
 int  ip_send(const u8 dst[4], u8 proto, const u8* payload, u32 len);
 int  icmp_ping(const u8 dst[4], u32 timeout_ms);
+void ip_drain();
 u64  stat_rx_ip();
 
 // ── UDP-Socket-Layer (A11.4) ──

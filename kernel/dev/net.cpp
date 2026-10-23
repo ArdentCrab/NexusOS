@@ -1,6 +1,7 @@
 // kernel/dev/net.cpp — A11.3: IPv4 + ICMP + ARP-Cache
 #include "kernel/dev/net.h"
 #include "kernel/dev/virtio_net.h"
+#include "kernel/dev/tcp.h"
 
 extern volatile u64 g_tick;
 
@@ -257,37 +258,47 @@ int udp_send(u16 src_port, const u8 dst_ip[4], u16 dst_port,
     return r;
 }
 
-void udp_drain() {
+void ip_drain() {
     u8 frame[1500];
     for (int iter = 0; iter < 8; iter++) {
         int n = virtio_net::net_poll(frame, sizeof(frame));
         if (n <= 0) break;
-        if (n < 14 + 20 + 8) continue;
+        if (n < 14 + 20) continue;
         if (frame[12] != 0x08 || frame[13] != 0x00) continue;
         u8* ip = frame + 14;
         u32 ihl = (u32)(ip[0] & 0x0F) * 4;
-        if (ip[9] != 17) continue;
-        if (n < (int)(14 + ihl + 8)) continue;
-        u8* udp = ip + ihl;
-        u16 src_port = ((u16)udp[0] << 8) | udp[1];
-        u16 dst_port = ((u16)udp[2] << 8) | udp[3];
-        u32 paylen = n - 14 - ihl - 8;
-        if (paylen > 256) paylen = 256;
-        for (u32 i = 0; i < 8; i++) {
-            if (!g_udp[i].used) continue;
-            if (g_udp[i].local_port != dst_port) continue;
-            u32 slot = g_udp[i].rx_head % 4;
-            u32 nxt = (g_udp[i].rx_head + 1) % 4;
-            if (nxt == g_udp[i].rx_tail) break;   // queue voll
-            for (u32 k = 0; k < paylen; k++) g_udp[i].rx_buf[slot][k] = udp[8 + k];
-            g_udp[i].rx_len[slot] = (u16)paylen;
-            memcpy_n(g_udp[i].rx_src_ip[slot], ip + 12, 4);
-            g_udp[i].rx_src_port[slot] = src_port;
-            g_udp[i].rx_head = nxt;
-            break;
+        u8 proto = ip[9];
+        if (n < (int)(14 + ihl)) continue;
+        const u8* payload = ip + ihl;
+        u32 paylen = n - 14 - ihl;
+        u8 src_ip[4];
+        memcpy_n(src_ip, ip + 12, 4);
+
+        if (proto == 17 && paylen >= 8) {
+            u16 src_port = ((u16)payload[0] << 8) | payload[1];
+            u16 dst_port = ((u16)payload[2] << 8) | payload[3];
+            u32 dlen = paylen - 8;
+            if (dlen > 256) dlen = 256;
+            for (u32 i = 0; i < 8; i++) {
+                if (!g_udp[i].used) continue;
+                if (g_udp[i].local_port != dst_port) continue;
+                u32 slot = g_udp[i].rx_head % 4;
+                u32 nxt  = (g_udp[i].rx_head + 1) % 4;
+                if (nxt == g_udp[i].rx_tail) break;
+                for (u32 k = 0; k < dlen; k++) g_udp[i].rx_buf[slot][k] = payload[8 + k];
+                g_udp[i].rx_len[slot] = (u16)dlen;
+                memcpy_n(g_udp[i].rx_src_ip[slot], src_ip, 4);
+                g_udp[i].rx_src_port[slot] = src_port;
+                g_udp[i].rx_head = nxt;
+                break;
+            }
+        } else if (proto == 6) {
+            tcp_handle_frame(src_ip, payload, paylen);
         }
     }
 }
+
+void udp_drain() { ip_drain(); }
 
 int udp_recv(u32 idx, u8* out_buf, u32 cap,
              u8* out_src_ip, u16* out_src_port, u32 timeout_ms) {
