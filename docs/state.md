@@ -279,3 +279,21 @@ Slab-Verhalten). Bei wiederholten `bench 100` kumulativ.
 **Bekannte Limitierung:** `slab-trim` ist manuell — nicht automatisch
 nach reap. Bei Bedarf: nach jedem REAP-Batch oder bei
 `used_count > threshold` aufrufen.
+
+## A-final-3 — cat_file streaming (2025-10-23)
+**Fix:** `cat`/`open`/`read` laden bei `O_RDONLY` die Datei nicht mehr
+komplett in `ram_buf` — Streaming aus der Extent-Kette.
+
+- `fs_read_at(file_key, offset, buf, len)`: liest N Bytes, kein Heap
+- `sys_open_kernel`: `ram_buf` nur bei `O_WRONLY`/`O_RDWR` laden
+- `sys_read_kernel`: wenn `ram_buf == 0` → `fs_read_at` streaming
+- `cmd_cat`: chunked `fs_read_at` direkt auf stdout
+
+**Verifiziert:**
+- `gen big 100000` → `cat big` (100 KB Muster) → `mem`:
+  `heap: 0 KiB used`, `pmm: used=2143` unverändert
+- Vorher: `heap: ~100 KiB`, `pmm: +25 Pages` Sockel durch ram_buf
+
+**Bekannte Limitierung:** `sys_write` mit großen Datenströmen
+(`write`-Pfad) nutzt weiter `ram_buf`. Schreiben > 1 MB ist limitiert.
+Fix wäre `fs_write_at` mit Extent-Wachstum — eigene Session (A-S7b).
