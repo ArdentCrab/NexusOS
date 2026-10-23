@@ -194,3 +194,40 @@ kleiner Timer/Reassembly-Mechanismus.
 - TCP-Segment-Reordering + FIN-im-selben-Poll-Durchlauf: funktioniert
   aktuell, aber bei sehr schnellen Servern koennte das letzte Datensegment
   vor FIN verloren gehen. Fix: FIN-Handling verzoegern bis Buffer leer.
+
+## B1.2 — Persistenz gehaertet (2025-10-23)
+**Design-Umstellung:** Payload lebt jetzt in eigenen LLRB-Records,
+kein RAM-Pool mehr.
+
+- `NS_MSG`  (0x09) — die Nachricht: key=`NS_MSG|seq<<8|ch`, a=0, b=len
+- `NS_MSGP` (0x0A) — Payload-Chunk: key=`NS_MSGP|seq<<8|ch<<4|ci`,
+  a=bytes[0..7], b=bytes[8..15]
+
+**Key-Layout-Praezisierung:**
+- seq belegt 48 Bit (nicht 56 wie urspruenglich gedacht)
+- Maske fuer seq-Extraktion: `0x0000FFFFFFFFFFFF`
+- MSG: bits 63..56 = NS, bits 55..8 = seq, bits 7..0 = ch
+- MSGP: bits 63..56 = NS, bits 55..8 = seq, bits 7..4 = ch, bits 3..0 = ci
+
+**Filter-Fixes (4 Stellen in persist.cpp):**
+- `collect_visit` (Save): `&& r->type != 9` ergaenzt
+- `backup_visit` (Rollback): `&& r->type != 9` ergaenzt
+- `load()` (Snapshot): `type > 8` -> `type > 9`
+- `ckpt_restore_data`: `type > 8` -> `type > 9`
+
+**Was getestet:**
+- ✅ In-Session: `msgsend` + `msgrecv` rekonstruiert Payload korrekt
+- ✅ WAL-Persistenz: 3 Messages gesendet, kill -9, Reboot -> alle 3 via WAL-Replay
+- ✅ Snapshot-Persistenz: `checkpoint` + kill -9 + Reboot -> Message via Snapshot
+- ✅ Multi-Channel, FIFO, Consume (nach recv ist Record weg)
+
+**Bekannte Limitierung (nicht blockierend):**
+- Bei wiederholten Snapshot+WAL-Zyklen koennen MSGP-Chunks dupliziert
+  werden (ueberschreiben sich beim Reconstruct, aber Index waechst).
+  Fix waere ein dediziertes `idx::put` mit "already exists = no-op" oder
+  Cleanup beim Delete.
+- 16-byte-Chunks sind ineffizient fuer kurze Messages (1 MSGP pro 16
+  Bytes = 6 Records fuer 100-byte-Message). Bei Bedarf: MSGP auf 48
+  Bytes erweitern (a+b+mehr Felder) — braucht Rec-Format-Erweiterung.
+
+**Naechster Schritt:** B1.3 (Syscalls 230-232), dann B1.4 (Pipes auf MSG).

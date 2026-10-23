@@ -17,6 +17,7 @@ static constexpr u64 NS_NAME    = 0x06ULL << 56;
 static constexpr u64 NS_DIR     = 0x07ULL << 56;
 static constexpr u64 NS_PATH    = 0x08ULL << 56;
 static constexpr u64 NS_MSG     = 0x09ULL << 56;
+static constexpr u64 NS_MSGP    = 0x0AULL << 56;
 
 struct Rec { u64 key; u32 type; u32 color; u64 a; u64 b; Rec* left; Rec* right; };
 

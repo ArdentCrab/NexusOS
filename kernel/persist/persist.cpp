@@ -89,7 +89,7 @@ static void flush_partial(WriteCtx* w) {
 struct CollectCtx { WriteCtx* w; };
 static void collect_visit(idx::Rec* r, void* ctx) {
     // Persistente Typen: CONFIG (1), SYS (4), FILE (5), NAME (6)
-    if (r->type != 1 && r->type != 4 && r->type != 5 && r->type != 6 && r->type != 7 && r->type != 8) return;
+    if (r->type != 1 && r->type != 4 && r->type != 5 && r->type != 6 && r->type != 7 && r->type != 8 && r->type != 9) return;
     CollectCtx* c = (CollectCtx*)ctx;
     write_record(c->w, r->key, r->type, r->a, r->b);
 }
@@ -394,7 +394,7 @@ static int        g_backup_n;
 
 static void backup_visit(idx::Rec* r, void*) {
     if (g_backup_n >= 512) return;
-    if (r->type != 1 && r->type != 4 && r->type != 5 && r->type != 6 && r->type != 7 && r->type != 8) return;
+    if (r->type != 1 && r->type != 4 && r->type != 5 && r->type != 6 && r->type != 7 && r->type != 8 && r->type != 9) return;
     PersistRec& p = g_backup[g_backup_n++];
     p.key = r->key; p.type = r->type; p._pad = 0; p.a = r->a; p.b = r->b;
 }
@@ -430,7 +430,7 @@ static int ckpt_restore_data(u32 start, u32 n_records, u64 expect_hash) {
             u32 type = *(u32*)(p + 8);
             u64 a    = *(u64*)(p + 16);
             u64 b    = *(u64*)(p + 24);
-            if (type == 0 || type == 2 || type == 3 || type > 8) continue;
+            if (type == 0 || type == 2 || type == 3 || type > 9) continue;
             idx::put(key, (idx::Type)type, a, b);
         }
         remaining -= n;
@@ -640,7 +640,7 @@ int load() {
             u32 type = *(u32*)(p + 8);
             u64 a    = *(u64*)(p + 16);
             u64 b    = *(u64*)(p + 24);
-            if (type == 0 || type == 2 || type == 3 || type > 8) continue;
+            if (type == 0 || type == 2 || type == 3 || type > 9) continue;
             idx::put(key, (idx::Type)type, a, b);
         }
         remaining -= n;
