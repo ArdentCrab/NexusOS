@@ -66,6 +66,11 @@ void fs_lsdirs();
 // A7b-3a: absolute Pfad-API
 i64  fs_write_abs(const char* abs, const char* content, usize len);
 i64  fs_cat_abs(const char* abs, char* out, usize out_max);
+
+// A-S7: liest N Bytes ab offset aus einer Datei (per FILE-Record-Key).
+// Kein Heap-Wachstum, unabhaengig von der Dateigroesse.
+// Rueckgabe: Anzahl gelesener Bytes (>=0) oder -errno.
+i64  fs_read_at(u64 file_key, u64 offset, u8* buf, u32 len);
 void migrate_files_v2();
 
 

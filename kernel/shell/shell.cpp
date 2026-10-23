@@ -1018,10 +1018,29 @@ static void cmd_sleep(int ac, char** av) {
 
 static void cmd_cat(int ac, char** av) {
     if (ac < 2) { hal::ps("usage: cat <name>\n"); return; }
-    static char buf[8192];   // bis ~16 Extent-Bloecke
-    int n = fs::cat_file(av[1], buf, sizeof(buf));
-    if (n < 0) { hal::pf("not found: %s\n", av[1]); return; }
-    hal::pf("%s\n", buf);
+    char abs[256];
+    const char* cwd = task::current ? task::current->cwd : "/";
+    if (fs::fs_resolve(av[1], cwd, abs, sizeof(abs)) < 0) {
+        hal::ps("bad path\n"); return;
+    }
+    u64 h = fs::hash_name(abs[0] == '/' ? abs + 1 : abs);
+    u64 fkey = idx::NS_FILE | h;
+    idx::Rec* r = idx::find(fkey);
+    if (!r || r->type != (u32)idx::Type::FILE) {
+        hal::ps("not found\n"); return;
+    }
+    // A-S7: chunked Lesen. Kein Heap-Wachstum, egal wie gross die Datei.
+    u64 size = r->a;
+    u8 buf[512];
+    u64 off = 0;
+    while (off < size) {
+        u32 n = (size - off > sizeof(buf)) ? (u32)sizeof(buf) : (u32)(size - off);
+        i64 got = fs::fs_read_at(fkey, off, buf, n);
+        if (got <= 0) break;
+        for (i64 k = 0; k < got; k++) hal::pc((char)buf[k]);
+        off += (u64)got;
+    }
+    hal::pc('\n');
 }
 static const char* type_name(u32 t) {
     switch (t) {

@@ -366,6 +366,79 @@ i64 fs_cat_abs(const char* abs, char* out, usize out_max) {
   return (i64)len;
 }
 
+// ---- A-S7: Streaming-Read --------------------------------------
+// Liest N Bytes ab 'offset' aus dem FILE-Record 'file_key'. Kein
+// Heap-Puffer, keine Allokation. Nutzt die vorhandene Extent-Kette.
+i64 fs_read_at(u64 file_key, u64 offset, u8* buf, u32 len) {
+    idx::Rec* r = idx::find(file_key);
+    if (!r || r->type != (u32)idx::Type::FILE) return -2;
+    u64 size = r->a;
+    u64 ref  = r->b;
+    if (offset >= size) return 0;
+    u64 avail = size - offset;
+    if ((u64)len > avail) len = (u32)avail;
+    if (len == 0) return 0;
+
+    // Inline (<= 8 Bytes)
+    if (size <= 8) {
+        for (u32 i = 0; i < len; i++) {
+            buf[i] = (u8)((ref >> ((offset + i) * 8)) & 0xFF);
+        }
+        return (i64)len;
+    }
+
+    // Ein Sektor (<= 512 Bytes)
+    if (size <= 512) {
+        u8 sbuf[512];
+        if (virtio_blk::read_sector(ref, sbuf) != 0) return -1;
+        for (u32 i = 0; i < len; i++) buf[i] = sbuf[offset + i];
+        return (i64)len;
+    }
+
+    // Extent-Kette
+    u64 idx_sec = ref;
+    u64 byte_pos = 0;
+    u32 written = 0;
+    u32 chain = 0;
+    while (idx_sec && written < len && chain++ < INDEX_CHAIN_MAX) {
+        u8 ibuf[512];
+        if (virtio_blk::read_sector(idx_sec, ibuf) != 0) return -1;
+        FsIndex* ix = (FsIndex*)ibuf;
+        if (ix->n_extents > EXTENTS_PER_INDEX) break;
+        for (u32 e = 0; e < ix->n_extents && written < len; e++) {
+            u64 ext_start_byte = byte_pos;
+            u64 ext_end_byte   = byte_pos + (u64)ix->extents[e].count * 512;
+            if (ext_end_byte <= offset) {
+                byte_pos = ext_end_byte;
+                continue;
+            }
+            u64 cur_pos = ext_start_byte;
+            for (u32 si = 0; si < ix->extents[e].count && written < len; si++) {
+                u64 sec_start_byte = cur_pos;
+                u64 sec_end_byte   = cur_pos + 512;
+                if (sec_end_byte <= offset) {
+                    cur_pos = sec_end_byte;
+                    continue;
+                }
+                u8 dbuf[512];
+                u64 lba = (u64)ix->extents[e].start + si;
+                if (virtio_blk::read_sector(lba, dbuf) != 0) return -1;
+                u64 lo = (offset > sec_start_byte) ? (offset - sec_start_byte) : 0;
+                u64 hi = (offset + len < sec_end_byte)
+                         ? (offset + len - sec_start_byte) : 512;
+                if (hi > 512) hi = 512;
+                for (u64 k = lo; k < hi && written < len; k++) {
+                    buf[written++] = dbuf[k];
+                }
+                cur_pos = sec_end_byte;
+            }
+            byte_pos = ext_end_byte;
+        }
+        idx_sec = ix->next;
+    }
+    return (i64)written;
+}
+
 // A7b-3a: Migration. Fuer alle NS_NAME-Records, die noch alt-Format haben
 // (b = basename[8..16] statt parent_hash), setze b = hash("/") = 177620.
 // Da alle Alt-Files in Root lagen, ist Parent = "/".

@@ -103,8 +103,11 @@ i64 sys_open_kernel(const char* name, u64 flags) {
     } else {
         size = exists ? r->a : 0;
     }
+    // A-S7: ram_buf nur bei Schreib-Zugriff laden.
+    // Bei O_RDONLY wird die Datei streaming via fs_read_at gelesen.
     u64 ram_buf = 0;
-    if (size > 0) {
+    bool want_write = (flags & O_WRONLY) || (flags & O_RDWR);
+    if (size > 0 && want_write) {
         char* p = (char*)heap::alloc((usize)size + 1);
         if (!p) return (i64)E_NOSPC;
         int got = fs::cat_file(name, p, (usize)size + 1);
@@ -171,8 +174,17 @@ i64 sys_read_kernel(int fd, void* kbuf, u64 len) {
 
     u64 avail = d->size - d->offset;
     u64 n = (len < avail) ? len : avail;
-    if (n == 0 || !d->ram_buf) return 0;
+    if (n == 0) return 0;
 
+    // A-S7: Streaming-Pfad, wenn kein ram_buf geladen (O_RDONLY).
+    if (!d->ram_buf) {
+        i64 got = fs::fs_read_at(d->key, d->offset, (u8*)kbuf, (u32)n);
+        if (got <= 0) return got;
+        d->offset += (u64)got;
+        return got;
+    }
+
+    // Klassischer Pfad: ram_buf vorhanden
     const u8* src = (const u8*)d->ram_buf + d->offset;
     u8* dst = (u8*)kbuf;
     for (u64 i = 0; i < n; i++) dst[i] = src[i];
