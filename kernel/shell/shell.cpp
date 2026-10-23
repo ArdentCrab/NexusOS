@@ -1674,6 +1674,177 @@ static void cmd_udprecv(int ac, char** av) {
     hal::ps("'\n");
 }
 
+// A11.5b: Ring-3 HTTP-Client via Syscalls 210-213
+static void emit_r3httpget_program(u8* code, u32 ip_be, u16 port,
+                                    const char* req, u32 req_len) {
+    for (int i = 0; i < 4096; i++) code[i] = 0;
+
+    u32 p = 0;
+    auto w8 = [&](u8 v) { code[p++] = v; };
+    auto w32 = [&](u32 v) {
+        code[p++] = (u8)v; code[p++] = (u8)(v>>8);
+        code[p++] = (u8)(v>>16); code[p++] = (u8)(v>>24);
+    };
+    auto w64 = [&](u64 v) {
+        for (int i = 0; i < 8; i++) code[p++] = (u8)(v >> (8*i));
+    };
+    auto mov_rax = [&](u64 v) { w8(0x48); w8(0xB8); w64(v); };
+    auto mov_rdi = [&](u64 v) { w8(0x48); w8(0xBF); w64(v); };
+    auto mov_rsi = [&](u64 v) { w8(0x48); w8(0xBE); w64(v); };
+    auto mov_rdx = [&](u64 v) { w8(0x48); w8(0xBA); w64(v); };
+    auto mov_r10 = [&](u64 v) { w8(0x49); w8(0xBA); w64(v); };
+    auto sysc    = [&]() { w8(0x0F); w8(0x05); };
+    auto mov_r12_rax = [&]() { w8(0x49); w8(0x89); w8(0xC4); };
+    auto mov_rdi_r12 = [&]() { w8(0x4C); w8(0x89); w8(0xE7); };
+    auto mov_r15_rax = [&]() { w8(0x49); w8(0x89); w8(0xC7); };
+    auto mov_rdx_r15 = [&]() { w8(0x4C); w8(0x89); w8(0xFA); };
+    auto xor_r14_r14 = [&]() { w8(0x4D); w8(0x31); w8(0xF6); };
+    auto add_r14_rax = [&]() { w8(0x49); w8(0x01); w8(0xC6); };
+    auto mov_rdi_r14 = [&]() { w8(0x4C); w8(0x89); w8(0xF7); };
+    auto test_rax_rax = [&]() { w8(0x48); w8(0x85); w8(0xC0); };
+    auto jne_rel32 = [&]() -> u32 { u32 pos = p; w8(0x0F); w8(0x85); w32(0); return pos; };
+    auto jle_rel32 = [&]() -> u32 { u32 pos = p; w8(0x0F); w8(0x8E); w32(0); return pos; };
+    auto jmp_rel32 = [&]() -> u32 { u32 pos = p; w8(0xE9); w32(0); return pos; };
+    auto patch_jcc = [&](u32 pos, u32 target) {
+        i32 rel = (i32)target - (i32)(pos + 6);
+        code[pos+2] = (u8)(rel & 0xFF);
+        code[pos+3] = (u8)((rel >> 8) & 0xFF);
+        code[pos+4] = (u8)((rel >> 16) & 0xFF);
+        code[pos+5] = (u8)((rel >> 24) & 0xFF);
+    };
+
+    const u64 CODE_VA = 0x40000000ULL;
+    const u64 BUF_VA  = 0x50000100ULL;
+    u64 req_addr = CODE_VA + 0x100;
+
+    // tcp_open() -> idx
+    mov_rax(210); sysc();
+    mov_r12_rax();
+
+    // tcp_connect(idx, ip_be, port)
+    mov_rax(211);
+    mov_rdi_r12();
+    mov_rsi(ip_be);
+    mov_rdx(port);
+    sysc();
+    test_rax_rax();
+    u32 jne_fail = jne_rel32();
+
+    // tcp_send(idx, req_addr, req_len)
+    mov_rax(212);
+    mov_rdi_r12();
+    mov_rsi(req_addr);
+    mov_rdx(req_len);
+    sysc();
+
+    // r14 = 0
+    xor_r14_r14();
+
+    // .loop: tcp_recv
+    u32 loop_pos = p;
+    mov_rax(213);
+    mov_rdi_r12();
+    mov_rsi(BUF_VA);
+    mov_rdx(512);
+    mov_r10(3000);
+    sysc();
+    test_rax_rax();
+    u32 jle_done = jle_rel32();
+
+    // total += n
+    add_r14_rax();
+
+    // write(1, BUF_VA, n)
+    mov_r15_rax();
+    mov_rax(1);
+    mov_rdi(1);
+    mov_rsi(BUF_VA);
+    mov_rdx_r15();
+    sysc();
+
+    // jmp .loop
+    u32 jmp_loop = jmp_rel32();
+
+    // .done: exit(total)
+    u32 done_pos = p;
+    mov_rax(60);
+    mov_rdi_r14();
+    sysc();
+
+    // .fail: exit(0xFF)
+    u32 fail_pos = p;
+    mov_rax(60);
+    mov_rdi(0xFF);
+    sysc();
+
+    patch_jcc(jne_fail, fail_pos);
+    patch_jcc(jle_done, done_pos);
+
+    i32 back = (i32)loop_pos - (i32)(jmp_loop + 5);
+    code[jmp_loop+1] = (u8)(back & 0xFF);
+    code[jmp_loop+2] = (u8)((back >> 8) & 0xFF);
+    code[jmp_loop+3] = (u8)((back >> 16) & 0xFF);
+    code[jmp_loop+4] = (u8)((back >> 24) & 0xFF);
+
+    for (u32 i = 0; i < req_len && (0x100 + i) < 0x200; i++) {
+        code[0x100 + i] = (u8)req[i];
+    }
+}
+
+static void cmd_r3httpget(int ac, char** av) {
+    if (ac < 3) { hal::ps("usage: r3httpget <ip> <port>\n"); return; }
+    u8 ip[4];
+    if (!_parse_ip4(av[1], ip)) { hal::ps("bad ip\n"); return; }
+    u32 port = 0;
+    for (const char* p = av[2]; *p >= '0' && *p <= '9'; p++) port = port * 10 + (u32)(*p - '0');
+    if (port == 0 || port > 65535) { hal::ps("bad port\n"); return; }
+
+    u32 ip_be = ((u32)ip[0] << 24) | ((u32)ip[1] << 16) |
+                ((u32)ip[2] <<  8) |  (u32)ip[3];
+
+    char req[200];
+    u32 rp = 0;
+    const char* pre = "GET / HTTP/1.1\r\nHost: ";
+    while (*pre) req[rp++] = *pre++;
+    for (int i = 0; i < 4; i++) {
+        u32 v = ip[i];
+        if (v >= 100) req[rp++] = (char)('0' + (v / 100));
+        if (v >= 10)  req[rp++] = (char)('0' + ((v / 10) % 10));
+        req[rp++] = (char)('0' + (v % 10));
+        if (i < 3) req[rp++] = '.';
+    }
+    const char* tail = "\r\nConnection: close\r\n\r\n";
+    while (*tail) req[rp++] = *tail++;
+
+    u64 code_phys  = mem::pmm::alloc();
+    u64 stack_phys = mem::pmm::alloc();
+    if (!code_phys || !stack_phys) { hal::ps("pmm fail\n"); return; }
+
+    u8* code = (u8*)mem::p2v(code_phys);
+    emit_r3httpget_program(code, ip_be, (u16)port, req, rp);
+
+    u8* stk = (u8*)mem::p2v(stack_phys);
+    for (int i = 0; i < 4096; i++) stk[i] = 0;
+
+    u64 my_pml4 = vmm::alloc_pml4();
+    if (!my_pml4) { hal::ps("alloc_pml4 fail\n"); return; }
+
+    u64 code_va  = 0x40000000ULL;
+    u64 stack_va = 0x50000000ULL;
+    if (!vmm::map_user_page_in(my_pml4, code_va,  code_phys,  0)) {
+        hal::ps("map code fail\n"); return;
+    }
+    if (!vmm::map_user_page_in(my_pml4, stack_va, stack_phys, vmm::P_WRITE)) {
+        hal::ps("map stack fail\n"); return;
+    }
+
+    task::TCB* t = task::spawn_full("r3httpget", user_elf_fn, nullptr,
+                                    my_pml4, code_va, stack_va + 0x3ff0);
+    if (!t) { hal::ps("spawn fail\n"); return; }
+    hal::pf("[R3HTTP] spawned pid=%u dst=%u.%u.%u.%u:%u req_len=%u\n",
+            (u32)t->pid, ip[0], ip[1], ip[2], ip[3], port, rp);
+}
+
 static void cmd_ping(int ac, char** av) {
     if (ac < 2) { hal::ps("usage: ping <ip> [count]\n"); return; }
     u32 count = 3;
@@ -1745,6 +1916,7 @@ static void dispatch() {
     if (streq(c, "arp"))                       { cmd_arp(argc, argv); return; }
     if (streq(c, "ping"))                      { cmd_ping(argc, argv); return; }
     if (streq(c, "r3ping"))                     { cmd_r3ping(argc, argv); return; }
+    if (streq(c, "r3httpget"))                  { cmd_r3httpget(argc, argv); return; }
     if (streq(c, "udpsend"))                    { cmd_udpsend(argc, argv); return; }
     if (streq(c, "httpget"))                    { cmd_httpget(argc, argv); return; }
     if (streq(c, "udprecv"))                    { cmd_udprecv(argc, argv); return; }
