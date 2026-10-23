@@ -251,3 +251,31 @@ kein RAM-Pool mehr.
 **Bekannte Limitierung:** Content-Encoding gzip wird nicht dekodiert (Body
 bleibt komprimiert, wenn Server `Content-Encoding: gzip` sendet ohne dass
 wir `Accept-Encoding` anfordern — meist nicht der Fall bei `Connection: close`).
+
+## A-final-2 — Slab-Trim (2025-10-23)
+**Problem:** `bench 100` hinterließ ~100-136 Pages Sockel — Slab-Chunks
+wurden allokiert, aber beim Free nicht an PMM zurückgegeben (klassisches
+Slab-Verhalten). Bei wiederholten `bench 100` kumulativ.
+
+**Fix:**
+- `ChunkHdr` als eigenes struct vor `struct Class`, mit
+  `{phys, magic, next, pages, objs_per_chunk, free_objs}` (40 Bytes
+  statt 16 — RAM-only, kein Disk-Format betroffen)
+- `Class` bekommt `ChunkHdr* chunks` + `u32 n_chunks`
+- `grow()` trackt `free_objs = objs_per_chunk` initial
+- `find_chunk(c, slot)` — sucht Chunk für eine Slot-Adresse
+- `alloc`: `free_objs--` beim Pop
+- `free`: `free_objs++` beim Push
+- `slab::trim()`: leere Chunks aus Liste, `free_list` bereinigen,
+  `pmm::free_n(phys, pages)`, `[SLAB] trim: N pages freed`
+- Shell: `slab-trim` — manuell aufrufbar
+
+**Verifiziert:**
+- bench 100 → mem → used=2255, slab-trim → 120 pages freed → used=2135
+- bench 100 → mem → used=2271, slab-trim → 136 pages freed → used=2135
+- Nach jedem trim exakt Baseline, kein kumulatives Wachstum
+- `slab: 27 objects in use` bleibt konstant (TCB-Tracking korrekt)
+
+**Bekannte Limitierung:** `slab-trim` ist manuell — nicht automatisch
+nach reap. Bei Bedarf: nach jedem REAP-Batch oder bei
+`used_count > threshold` aufrufen.
