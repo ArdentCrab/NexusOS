@@ -231,3 +231,23 @@ kein RAM-Pool mehr.
   Bytes erweitern (a+b+mehr Felder) — braucht Rec-Format-Erweiterung.
 
 **Naechster Schritt:** B1.3 (Syscalls 230-232), dann B1.4 (Pipes auf MSG).
+
+## A-final-1 — HTTP Robustheit (2025-10-23)
+**Was gebaut:**
+- `kernel/dev/http.cpp` + `http.h` — eigene HTTP-Schicht
+  - Header/Body-Trennung via `\r\n\r\n`
+  - Chunked-Transfer-Encoding-Decoder
+  - Content-Length-Modus (wenn kein Chunked)
+- `tcp_handle_frame`: FIN-Branch puffert jetzt Payload vor `state=CLOSED`
+- `rx_buf[4][512]` → `rx_buf[8][1460]` (8 × MSS, ~11 KB Total)
+- `rcv_nxt` bei Data korrekt `seq + paylen` (nicht `+ cp`; cp==paylen immer weil 1460 == MSS)
+- `cmd_httpget` refactored: nutzt `http_get`, trennt Header-Ausgabe von Body
+
+**Was getestet:**
+- ✅ Lokal: `httpget 10.0.2.2 8000 /` → body=1063, komplettes Directory-Listing
+- ✅ Cloudflare: `httpget example.com 80 /` → body=577, echtes HTML
+  (raw_len=932 → 355 Bytes Chunked-Framing dekodiert)
+
+**Bekannte Limitierung:** Content-Encoding gzip wird nicht dekodiert (Body
+bleibt komprimiert, wenn Server `Content-Encoding: gzip` sendet ohne dass
+wir `Accept-Encoding` anfordern — meist nicht der Fall bei `Connection: close`).
